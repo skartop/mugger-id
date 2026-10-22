@@ -1,5 +1,11 @@
 // Rendering only. Every string from the API goes in as a text node, never as HTML.
 
+// Flattens nested child arrays and drops null/undefined/false, so optional children can be
+// written inline. The DOM's own append/replaceChildren would turn these into text instead.
+export const childList = (children) => children.flat(Infinity).filter((c) => c != null && c !== false);
+
+const toNode = (c) => (c instanceof Node ? c : String(c));
+
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -8,12 +14,11 @@ export function h(tag, attrs = {}, ...children) {
     else if (k === 'class') el.className = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    el.append(c instanceof Node ? c : String(c));
-  }
+  el.append(...childList(children).map(toNode));
   return el;
 }
+
+const fill = (el, ...children) => el.replaceChildren(...childList(children).map(toNode));
 
 export const money = (n) => `$${(n ?? 0).toLocaleString('en-US')}`;
 export const when = (ts) => `${new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ')} TCT`;
@@ -107,7 +112,7 @@ export function renderDrilldown(el, row, { logFor, fingerprints, loadProfile, on
             h('summary', {}, `${when(f.started)} · ${f.result} · FF ${ffText(f.ff)} · ${weaponsText(f)}`),
             logList(logFor(f.code))))))));
   });
-  el.replaceChildren(
+  fill(el,
     h('div', { class: 'drill-head' },
       h('h3', {}, `Stealthed mug · ${when(mug.started)} · ${money(mug.mugAmount)}`),
       h('button', { type: 'button', onclick: onClose }, 'Close')),
