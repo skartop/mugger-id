@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.torn.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>Mugger ID</title>
+<meta name="description" content="Find out who has been stealth-mugging you in Torn, using your own API key. Runs entirely in your browser.">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1f23; --muted: #5d636e; --line: #dcdad4;
+    --accent: #8a1c1c; --accent-text: #ffffff;
+    --high: #8a1c1c; --medium: #9a5b00; --low: #4a5568; --none: #8b9099;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15171a; --panel: #1e2125; --text: #e7e8ea; --muted: #a0a6b0; --line: #33373d;
+      --accent: #e06666; --accent-text: #15171a;
+      --high: #ff8a8a; --medium: #f0b45a; --low: #b8c0cc; --none: #8b9099;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15171a; --panel: #1e2125; --text: #e7e8ea; --muted: #a0a6b0; --line: #33373d;
+    --accent: #e06666; --accent-text: #15171a;
+    --high: #ff8a8a; --medium: #f0b45a; --low: #b8c0cc; --none: #8b9099;
+    color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 60rem; margin: 0 auto; padding-inline: 1rem; padding-block: 1.5rem 3rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 1.75rem 0 .5rem; }
+  .lede, .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: 1rem; margin-top: 1rem; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+  .row > * { flex: 1 1 12rem; }
+  input[type=password], select { width: 100%; box-sizing: border-box; padding: .55rem .6rem; border: 1px solid var(--line); border-radius: .4rem; background: var(--bg); color: var(--text); font: inherit; }
+  .check { font-weight: 400; display: flex; gap: .4rem; align-items: center; }
+  button { font: inherit; padding: .55rem 1rem; border-radius: .4rem; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .6; cursor: default; }
+  .notice { margin: .75rem 0 0; padding: .6rem .75rem; border-left: 3px solid var(--accent); background: var(--bg); border-radius: .3rem; }
+  details summary { cursor: pointer; }
+  .error { color: var(--high); font-weight: 600; }
+  progress { width: 100%; height: .8rem; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  td:nth-child(4) { white-space: normal; }
+  th { font-size: .85rem; color: var(--muted); font-weight: 600; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.clickable tbody tr { cursor: pointer; }
+  table.clickable tbody tr:hover { background: var(--panel); }
+  table.clickable tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--panel); }
+  .badge { display: inline-block; font-size: .75rem; font-weight: 700; padding: .05rem .45rem; border-radius: 1rem; border: 1px solid currentColor; }
+  .badge.high { color: var(--high); } .badge.medium { color: var(--medium); } .badge.low { color: var(--low); } .badge.none { color: var(--none); }
+  .drill-head { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
+  .drill-head h3 { margin: 0; }
+  ol.log { padding-left: 1.4rem; font-size: .92rem; }
+  .suspect { border-top: 1px solid var(--line); padding-top: .5rem; margin-top: .75rem; }
+  .suspect h4 { margin: .25rem 0; }
+  .caveat { font-style: italic; color: var(--muted); }
+  a { color: var(--accent); }
+  table.ds td, table.ds th { white-space: normal; }
+  footer { margin-top: 2rem; font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<main>
+  <h1>Mugger ID</h1>
+  <p class="lede">See who has most likely been stealth-mugging you. Stealth hides the attacker's name, but not their weapons, fair fight or timing — this page compares your stealthed mugs with the players who have attacked you openly.</p>
+
+  <form id="start-form" class="panel" autocomplete="off">
+    <div class="row">
+      <div>
+        <label for="key">Your Torn API key (Limited)</label>
+        <input id="key" type="password" inputmode="text" spellcheck="false" placeholder="16 letters and numbers" required>
+      </div>
+      <div style="flex: 0 1 9rem">
+        <label for="days">Look back</label>
+        <select id="days">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+        </select>
+      </div>
+      <div style="flex: 0 0 auto">
+        <button id="analyze" class="primary" type="submit">Analyze</button>
+      </div>
+    </div>
+    <label class="check" style="margin-top:.6rem"><input id="remember" type="checkbox"> Remember my key on this device</label>
+    <p class="notice">🔒 Your API key is stored only on your own device (and only if you tick 'remember'). It is never sent to or stored by this site — it goes straight to api.torn.com.</p>
+    <p class="muted" style="margin:.5rem 0 0">Need a key? <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Create a Limited key in Torn preferences</a>.</p>
+    <details style="margin-top:.75rem">
+      <summary>What this does with your data (Torn API terms)</summary>
+      <div class="scroll">
+        <table class="ds">
+          <tbody>
+            <tr><th>Data storage</th><td>Fight logs are cached in your browser only, so re-runs are fast. Nothing is stored anywhere else.</td></tr>
+            <tr><th>Data sharing</th><td>None. No server, no analytics, no third parties. Your browser talks only to api.torn.com.</td></tr>
+            <tr><th>Purpose of use</th><td>Identify likely attackers in your own incoming attack history.</td></tr>
+            <tr><th>Key storage &amp; sharing</th><td>Kept in memory, or on this device if you tick "remember". Never shared.</td></tr>
+            <tr><th>Key access level</th><td>Limited</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><button id="clear" type="button">Clear cached data and remembered key</button> <span id="cleared" class="muted" hidden>Cleared.</span></p>
+    </details>
+    <p id="error" class="error" role="alert" hidden></p>
+  </form>
+
+  <section id="working" class="panel" hidden aria-live="polite">
+    <p id="progress-label">Starting…</p>
+    <progress id="progress"></progress>
+    <p class="muted">Torn allows 100 API calls a minute per key; this page uses up to 80, so other tools on the same key may slow down meanwhile. Results fill in as logs arrive.</p>
+    <button id="cancel" type="button">Cancel</button>
+  </section>
+
+  <section id="results" hidden>
+    <p id="partial" class="notice" hidden></p>
+    <div id="summary" class="panel"></div>
+    <h2>Suspects <span class="muted" style="font-size:.85rem;font-weight:400">— probable, not proof</span></h2>
+    <div id="leaderboard"></div>
+    <h2>Stealthed mugs</h2>
+    <label class="check"><input id="only-strong" type="checkbox"> Only show High and Medium suspects</label>
+    <div id="mugs"></div>
+    <section id="drill" class="panel" hidden></section>
+    <p class="caveat">Suspects are probable, not proof. Fair fight shifts as stats change, and FF 3.00 is the cap many attackers share.</p>
+  </section>
+
+  <footer>Not affiliated with Torn. Source code is public so you can check exactly where your key goes.</footer>
+</main>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>
