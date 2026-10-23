@@ -1,4 +1,4 @@
-import { ATTACK_TYPES } from './analyze.js';
+import { ATTACK_TYPES } from './analyze.js?v=3';
 
 // Rendering only. Every string from the API goes in as a text node, never as HTML.
 

@@ -28,3 +28,9 @@ A **Limited** key is enough.
 (on Windows you may need `py -m http.server 8765`)
 
 then open http://localhost:8765/.
+
+## Releasing a change
+
+Bump the `?v=` number on the `<script>` tag in `index.html` and on every `import` in `src/`
+(all to the same new value) so visitors' browsers load the new code instead of a cached copy.
+`npm test` fails if they don't match.

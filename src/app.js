@@ -1,7 +1,7 @@
-import { createClient, TornError } from './torn.js';
-import { openCache } from './cache.js';
-import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js';
-import { renderSummary, renderLeaderboard, renderMugList, renderDrilldown } from './ui.js';
+import { createClient, TornError } from './torn.js?v=3';
+import { openCache } from './cache.js?v=3';
+import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js?v=3';
+import { renderSummary, renderLeaderboard, renderMugList, renderDrilldown } from './ui.js?v=3';
 
 const KEY_STORE = 'mugger-id:key';
 const $ = (id) => document.getElementById(id);
