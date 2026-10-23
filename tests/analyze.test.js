@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fingerprint, buildCandidates, weaponWeights, scoreCandidate, confidenceOf, analyze } from '../src/analyze.js';
+import { fingerprint, buildCandidates, weaponWeights, scoreCandidate, confidenceOf, analyze, logsNeeded } from '../src/analyze.js';
 import { buildDataset, attack, attacklog, player, T0, DAY } from './fixtures/dataset.js';
 
 function setup() {
@@ -133,7 +133,7 @@ test('leaderboard lists only Medium/High top suspects', () => {
   const { attacks, logs } = buildDataset();
   const { leaderboard } = analyze(attacks, logs);
   assert.deepEqual(leaderboard, [
-    { id: 2001, name: 'SuspectKnife', faction: 'Faction K', mugs: 2, total: 1315080 + 261913, best: 'High' },
+    { id: 2001, name: 'SuspectKnife', faction: 'Faction K', hits: 2, total: 1315080 + 261913, best: 'High' },
   ]);
 });
 
@@ -195,4 +195,61 @@ test('a log payload without a log array is treated as missing, not thrown on', (
   const f = fingerprint(attacks[0], {});
   assert.equal(f.logMissing, true);
   assert.deepEqual(f.weapons, {});
+});
+
+// --- attack-type selector ---
+
+function withStealthedHosp() {
+  const { attacks, logs } = buildDataset();
+  const hosp = attack({ at: T0 + 6 * DAY, result: 'Hospitalized', ff: 3, respect: 3.05 });
+  attacks.push(hosp);
+  logs.set(hosp.code, attacklog(hosp, [
+    ['hit', 'Someone hit {d} with their Diamond Bladed Knife in the Chest for 165'],
+    ['won', 'Someone critically hit {d} with their Diamond Bladed Knife in the Head for 610'],
+    ['hosp', 'Someone hospitalized {d} (+3.05)'],
+  ]));
+  return { attacks, logs, hosp };
+}
+
+test('analyze defaults to stealthed mugs only', () => {
+  const { attacks, logs } = withStealthedHosp();
+  const r = analyze(attacks, logs);
+  assert.equal(r.results.length, 5);
+  assert.ok(r.results.every((x) => x.mug.result === 'Mugged'));
+  assert.equal(r.summary.type, 'mugs');
+});
+
+test('hospitalizations type scores only stealthed hospitalizations, with no money', () => {
+  const { attacks, logs, hosp } = withStealthedHosp();
+  const r = analyze(attacks, logs, 'hosp');
+  assert.deepEqual(r.results.map((x) => x.mug.id), [hosp.id]);
+  assert.equal(r.results[0].suspects[0].candidate.name, 'SuspectKnife');
+  assert.equal(r.results[0].suspects[0].confidence, 'High');
+  assert.equal(r.summary.type, 'hosp');
+  assert.equal(r.summary.total, 0);
+  assert.deepEqual(r.leaderboard.map((x) => [x.name, x.hits, x.total]), [['SuspectKnife', 1, 0]]);
+});
+
+test('all type covers every stealthed attack and counts hits across types', () => {
+  const { attacks, logs } = withStealthedHosp();
+  const r = analyze(attacks, logs, 'all');
+  assert.equal(r.results.length, 6);
+  assert.equal(r.summary.total, 1315080 + 261913 + 32 + 393 + 1071);
+  assert.deepEqual(r.leaderboard.map((x) => [x.name, x.hits]), [['SuspectKnife', 3]]);
+});
+
+test('left-on-the-street type matches the "Attacked" result', () => {
+  const { attacks, logs } = buildDataset();
+  const left = attack({ at: T0 + 3 * DAY, result: 'Attacked', ff: 1.5, respect: 1.2 });
+  attacks.push(left);
+  logs.set(left.code, attacklog(left, [['won', 'Someone hit {d} with their Sai in the Chest for 400']]));
+  assert.deepEqual(analyze(attacks, logs, 'left').results.map((x) => x.mug.id), [left.id]);
+});
+
+test('logsNeeded asks for every visible attack plus the selected stealthed type', () => {
+  const { attacks } = withStealthedHosp();
+  const visible = attacks.filter((a) => a.attacker).length;
+  assert.equal(logsNeeded(attacks, 'mugs').length, visible + 5);
+  assert.equal(logsNeeded(attacks, 'hosp').length, visible + 1);
+  assert.equal(logsNeeded(attacks, 'all').length, attacks.length);
 });

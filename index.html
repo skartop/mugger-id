@@ -76,7 +76,7 @@
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
-  td:nth-child(4) { white-space: normal; }
+  td.wrap { white-space: normal; }
   th { font-size: .8rem; color: var(--muted); font-weight: 700; background: #292929; }
   tbody tr:nth-child(even) { background: rgba(255, 255, 255, .02); }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -88,6 +88,10 @@
   .badge.medium { background: var(--tape); border-color: var(--tape); color: #111111; }
   .badge.low { color: var(--low); }
   .badge.none { color: var(--none); }
+  .types { display: flex; flex-wrap: wrap; gap: 0; margin-top: 1rem; border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; width: fit-content; max-width: 100%; }
+  .types button { border: 0; border-right: 1px solid var(--edge); border-radius: 0; }
+  .types button:last-child { border-right: 0; }
+  .types button[aria-pressed="true"] { background: linear-gradient(#93bd3a, var(--green-dark)); color: #ffffff; font-weight: 700; text-shadow: 0 1px 0 rgba(0, 0, 0, .5); }
   .drill-head { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
   .drill-head h3 { margin: 0; font-size: 1rem; }
   ol.log { padding-left: 1.6rem; font-size: .9rem; background: #232323; border: 1px solid var(--edge); border-radius: 3px; padding-block: .5rem; }
@@ -159,6 +163,12 @@
   </section>
 
   <section id="results" hidden>
+    <div class="types" role="group" aria-label="Which stealthed attacks to explain">
+      <button type="button" data-type="mugs" aria-pressed="true">Mugs</button>
+      <button type="button" data-type="hosp" aria-pressed="false">Hospitalizations</button>
+      <button type="button" data-type="left" aria-pressed="false">Left on the street</button>
+      <button type="button" data-type="all" aria-pressed="false">All stealthed</button>
+    </div>
     <p id="partial" class="notice" hidden></p>
     <div id="summary" class="panel"></div>
     <section class="panel">
@@ -166,7 +176,7 @@
       <div id="leaderboard"></div>
     </section>
     <section class="panel">
-      <h2 class="bar">Stealthed mugs</h2>
+      <h2 class="bar" id="list-title">Stealthed mugs</h2>
       <label class="check" style="margin-bottom:.5rem"><input id="only-strong" type="checkbox"> Only show High and Medium suspects</label>
       <div id="mugs"></div>
     </section>

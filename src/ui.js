@@ -1,3 +1,5 @@
+import { ATTACK_TYPES } from './analyze.js';
+
 // Rendering only. Every string from the API goes in as a text node, never as HTML.
 
 // Flattens nested child arrays and drops null/undefined/false, so optional children can be
@@ -28,45 +30,61 @@ const badge = (c) => h('span', { class: `badge ${c ? c.toLowerCase() : 'none'}` 
 const weaponsText = (fp) => Object.keys(fp.weapons).join(', ') || (fp.logMissing ? 'log unavailable' : '—');
 const ffText = (ff) => (ff == null ? '—' : ff.toFixed(2));
 
+const RESULT_NOUN = { Mugged: 'mug', Hospitalized: 'hospitalization', Attacked: 'attack (left on the street)' };
+const RESULT_LABEL = { Mugged: 'Mug', Hospitalized: 'Hospitalization', Attacked: 'Left on street' };
+const resultNoun = (result) => RESULT_NOUN[result] ?? `attack (${result.toLowerCase()})`;
+const showsMoney = (type) => type === 'mugs' || type === 'all';
+const plural = (n, type) => (n === 1 ? ATTACK_TYPES[type].one : ATTACK_TYPES[type].many);
+
 export function renderSummary(el, { summary }) {
   const c = summary.byConfidence;
+  const money_ = showsMoney(summary.type) ? ` (${money(summary.total)})` : '';
   el.replaceChildren(
     h('p', { class: 'summary' },
-      h('strong', {}, `${summary.count} stealthed mugs (${money(summary.total)})`),
+      h('strong', {}, `${summary.count} stealthed ${plural(summary.count, summary.type)}${money_}`),
       ` · ${c.High} High · ${c.Medium} Medium · ${c.Low} Low · ${c.None} no likely suspect`,
       summary.ambiguous > 0 ? ` · ${summary.ambiguous} ambiguous` : null),
   );
 }
 
-export function renderLeaderboard(el, { leaderboard }) {
+export function renderLeaderboard(el, { leaderboard, summary }) {
   if (!leaderboard.length) {
     el.replaceChildren(h('p', { class: 'muted' }, 'No suspects with Medium or High confidence.'));
     return;
   }
+  const withMoney = showsMoney(summary.type);
   el.replaceChildren(
     h('div', { class: 'scroll' },
       h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Suspect'), h('th', {}, 'Faction'), h('th', { class: 'num' }, 'Mugs'), h('th', { class: 'num' }, 'Taken'), h('th', {}, 'Best'))),
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Suspect'), h('th', {}, 'Faction'), h('th', { class: 'num' }, 'Hits'),
+          withMoney && h('th', { class: 'num' }, 'Taken'), h('th', {}, 'Best'))),
         h('tbody', {}, leaderboard.map((r) =>
           h('tr', {},
             h('td', {}, profileLink(r)),
             h('td', {}, r.faction ?? 'No faction'),
-            h('td', { class: 'num' }, r.mugs),
-            h('td', { class: 'num' }, money(r.total)),
+            h('td', { class: 'num' }, r.hits),
+            withMoney && h('td', { class: 'num' }, money(r.total)),
             h('td', {}, badge(r.best))))))),
   );
 }
 
-export function renderMugList(el, { results }, { onlyStrong, onSelect }) {
+export function renderMugList(el, { results, summary }, { onlyStrong, onSelect }) {
+  const { type } = summary;
   const rows = results.filter((r) => !onlyStrong || ['High', 'Medium'].includes(r.suspects[0]?.confidence));
   if (!rows.length) {
-    el.replaceChildren(h('p', { class: 'muted' }, results.length ? 'No mugs match this filter.' : 'No stealthed mugs in this period.'));
+    el.replaceChildren(h('p', { class: 'muted' },
+      results.length ? `No ${ATTACK_TYPES[type].many} match this filter.` : `No stealthed ${ATTACK_TYPES[type].many} in this period.`));
     return;
   }
+  const withMoney = showsMoney(type);
+  const withResult = type === 'all';
   el.replaceChildren(
     h('div', { class: 'scroll' },
       h('table', { class: 'clickable' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', { class: 'num' }, 'Taken'), h('th', { class: 'num' }, 'FF'), h('th', {}, 'Weapons'), h('th', {}, 'Top suspect'))),
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'When'), withResult && h('th', {}, 'Result'), withMoney && h('th', { class: 'num' }, 'Taken'),
+          h('th', { class: 'num' }, 'FF'), h('th', {}, 'Weapons'), h('th', {}, 'Top suspect'))),
         h('tbody', {}, rows.map((r) => {
           const top = r.suspects[0];
           const open = () => onSelect(r);
@@ -77,9 +95,10 @@ export function renderMugList(el, { results }, { onlyStrong, onSelect }) {
             }
           } },
             h('td', {}, when(r.mug.started)),
-            h('td', { class: 'num' }, money(r.mug.mugAmount)),
+            withResult && h('td', {}, RESULT_LABEL[r.mug.result] ?? r.mug.result),
+            withMoney && h('td', { class: 'num' }, r.mug.result === 'Mugged' ? money(r.mug.mugAmount) : '—'),
             h('td', { class: 'num' }, ffText(r.mug.ff)),
-            h('td', {}, weaponsText(r.mug)),
+            h('td', { class: 'wrap' }, weaponsText(r.mug)),
             r.ambiguous
               ? h('td', {}, `${top.candidate.name} or ${r.suspects[1].candidate.name} `, badge(top.confidence), h('span', { class: 'muted' }, ' (ambiguous)'))
               : h('td', {}, top ? `${top.candidate.name} ` : '', badge(top?.confidence)));
@@ -114,7 +133,7 @@ export function renderDrilldown(el, row, { logFor, fingerprints, loadProfile, on
   });
   fill(el,
     h('div', { class: 'drill-head' },
-      h('h3', {}, `Stealthed mug · ${when(mug.started)} · ${money(mug.mugAmount)}`),
+      h('h3', {}, `Stealthed ${resultNoun(mug.result)} · ${when(mug.started)}${mug.result === 'Mugged' ? ` · ${money(mug.mugAmount)}` : ''}`),
       h('button', { type: 'button', onclick: onClose }, 'Close')),
     h('p', { class: 'muted' }, `FF ${ffText(mug.ff)} · respect ${mug.respect} · ${mug.overseas ? 'abroad' : 'in Torn City'}`),
     h('h4', {}, 'Fight log'),

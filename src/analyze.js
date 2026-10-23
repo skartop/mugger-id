@@ -196,20 +196,41 @@ function buildLeaderboard(results) {
   for (const { mug, suspects, ambiguous } of results) {
     const top = suspects[0];
     if (!top || ambiguous || top.confidence === 'Low') continue;
-    const row = rows.get(top.candidate.id) ?? { ...top.candidate, mugs: 0, total: 0, best: top.confidence };
-    row.mugs += 1;
+    const row = rows.get(top.candidate.id) ?? { ...top.candidate, hits: 0, total: 0, best: top.confidence };
+    row.hits += 1;
     row.total += mug.mugAmount ?? 0;
     if (RANK[top.confidence] > RANK[row.best]) row.best = top.confidence;
     rows.set(top.candidate.id, row);
   }
-  return [...rows.values()].sort((a, b) => RANK[b.best] - RANK[a.best] || b.mugs - a.mugs || b.total - a.total);
+  return [...rows.values()].sort((a, b) => RANK[b.best] - RANK[a.best] || b.hits - a.hits || b.total - a.total);
 }
 
-export function analyze(attacks, logs) {
+// Which stealthed attacks each selector choice covers. `results: null` means every stealthed attack.
+export const ATTACK_TYPES = {
+  mugs: { label: 'Mugs', one: 'mug', many: 'mugs', results: ['Mugged'] },
+  hosp: { label: 'Hospitalizations', one: 'hospitalization', many: 'hospitalizations', results: ['Hospitalized'] },
+  left: { label: 'Left on the street', one: 'attack (left on the street)', many: 'attacks (left on the street)', results: ['Attacked'] },
+  all: { label: 'All stealthed', one: 'attack', many: 'attacks', results: null },
+};
+
+const ofType = (type) => {
+  const allowed = ATTACK_TYPES[type].results;
+  return (result) => allowed === null || allowed.includes(result);
+};
+
+// Logs to fetch for a type: every visible attack (the candidates) plus the stealthed attacks of that type.
+export function logsNeeded(attacks, type) {
+  const wanted = ofType(type);
+  return attacks.filter((a) => a.attacker || wanted(a.result));
+}
+
+// Each result's `mug` is the stealthed attack being explained — a mug unless another type is selected.
+export function analyze(attacks, logs, type = 'mugs') {
   const fingerprints = attacks.map((a) => fingerprint(a, logs.get(a.code)));
   const candidates = buildCandidates(fingerprints);
-  const mugs = fingerprints.filter((f) => f.stealthed && f.result === 'Mugged').sort((a, b) => b.started - a.started);
-  const results = mugs.map((mug) => {
+  const wanted = ofType(type);
+  const stealthed = fingerprints.filter((f) => f.stealthed && wanted(f.result)).sort((a, b) => b.started - a.started);
+  const results = stealthed.map((mug) => {
     const weights = weaponWeights(mug, candidates);
     const suspects = candidates
       .map((c) => ({ candidate: { id: c.id, name: c.name, faction: c.faction }, ...scoreCandidate(mug, c, weights) }))
@@ -219,5 +240,5 @@ export function analyze(attacks, logs) {
     const ambiguous = suspects.length > 1 && suspects[0].confidence !== 'Low' && suspects[0].confidence === suspects[1].confidence;
     return { mug, suspects, ambiguous };
   });
-  return { results, candidates, fingerprints, summary: summarize(results), leaderboard: buildLeaderboard(results) };
+  return { results, candidates, fingerprints, summary: { ...summarize(results), type }, leaderboard: buildLeaderboard(results) };
 }

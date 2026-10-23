@@ -1,6 +1,6 @@
 import { createClient, TornError } from './torn.js';
 import { openCache } from './cache.js';
-import { analyze } from './analyze.js';
+import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js';
 import { renderSummary, renderLeaderboard, renderMugList, renderDrilldown } from './ui.js';
 
 const KEY_STORE = 'mugger-id:key';
@@ -13,7 +13,8 @@ const storedKey = {
 
 const FATAL = new Set([2, 5, 8, 9, 10, 13, 16, 18]); // errors where continuing cannot help
 let cancelled = false;
-let state = null; // { client, attacks, logs, result }
+let busy = false;
+let state = null; // { client, attacks, logs, cache, type, result }
 const profiles = new Map();
 
 function setError(message) {
@@ -33,19 +34,35 @@ function setProgress(label, done = 0, total = 0) {
 
 function render() {
   if (!state) return;
-  state.result = analyze(state.attacks, state.logs);
+  state.result = analyze(state.attacks, state.logs, state.type);
   $('results').hidden = false;
+  $('list-title').textContent = `Stealthed ${ATTACK_TYPES[state.type].many}`;
   renderSummary($('summary'), state.result);
   renderLeaderboard($('leaderboard'), state.result);
   renderMugList($('mugs'), state.result, { onlyStrong: $('only-strong').checked, onSelect: openDrill });
+  setPartial();
 }
 
-function setPartial(logs, wanted) {
-  const missing = logs.size < wanted;
+// Banner while some logs the selected type needs are still missing.
+function setPartial() {
+  const needed = logsNeeded(state.attacks, state.type);
+  const loaded = needed.filter((a) => state.logs.has(a.code)).length;
+  const missing = loaded < needed.length;
   $('partial').hidden = !missing;
   $('partial').textContent = missing
-    ? `Partial results — ${logs.size} of ${wanted} fight logs loaded. Confidence may be overstated; run Analyze again to finish.`
+    ? `Partial results — ${loaded} of ${needed.length} fight logs loaded. Confidence may be overstated; run Analyze again to finish.`
     : '';
+}
+
+function showType(type) {
+  for (const b of document.querySelectorAll('.types button')) b.setAttribute('aria-pressed', String(b.dataset.type === type));
+}
+
+function setBusy(on) {
+  busy = on;
+  $('working').hidden = !on;
+  $('analyze').disabled = on;
+  for (const b of document.querySelectorAll('.types button')) b.disabled = on;
 }
 
 function loadProfile(id) {
@@ -67,15 +84,42 @@ function openDrill(row) {
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// Fetches the logs the selected type still needs (device cache first), rendering as they arrive.
+async function fetchMissingLogs() {
+  const todo = [];
+  for (const a of logsNeeded(state.attacks, state.type)) {
+    if (state.logs.has(a.code)) continue;
+    const cached = await state.cache.get(a.code);
+    if (cached) state.logs.set(a.code, cached);
+    else todo.push(a);
+  }
+  render();
+  for (let i = 0; i < todo.length && !cancelled; i++) {
+    const minutes = Math.ceil(((todo.length - i) * 0.75) / 60);
+    setProgress(`Fetching fight logs ${i} / ${todo.length} (about ${minutes} min left)`, i, todo.length);
+    try {
+      const log = await state.client.attackLog(todo[i].code);
+      if (log) {
+        state.logs.set(todo[i].code, log);
+        await state.cache.put(todo[i].code, log);
+      }
+    } catch (e) {
+      if (e instanceof TornError && FATAL.has(e.code)) throw e;
+      // anything else: skip this log and keep going
+    }
+    if (i % 20 === 19) render();
+  }
+  render();
+}
+
 async function run(key, days) {
   cancelled = false;
   setError(null);
   $('cleared').hidden = true;
   $('drill').hidden = true;
   $('partial').hidden = true;
-  $('working').hidden = false;
-  $('analyze').disabled = true;
-  let wantedCount = 0;
+  showType('mugs');
+  setBusy(true);
   const client = createClient(key, { onRateLimit: () => setProgress('Torn rate limit reached. Waiting 60 seconds…') });
   try {
     setProgress('Checking your key…');
@@ -84,43 +128,32 @@ async function run(key, days) {
 
     const fromTs = Math.floor(Date.now() / 1000) - days * 86400;
     const attacks = await client.incomingAttacks(fromTs, (n) => setProgress(`Loading your incoming attacks… ${n}`));
-    const cache = await openCache();
-    const wanted = attacks.filter((a) => a.attacker || a.result === 'Mugged');
-    wantedCount = wanted.length;
-    const logs = new Map();
-    const todo = [];
-    for (const a of wanted) {
-      const cached = await cache.get(a.code);
-      if (cached) logs.set(a.code, cached);
-      else todo.push(a);
-    }
-    state = { client, attacks, logs, result: null };
-    render();
-
-    for (let i = 0; i < todo.length && !cancelled; i++) {
-      const minutes = Math.ceil(((todo.length - i) * 0.75) / 60);
-      setProgress(`Fetching fight logs ${i} / ${todo.length} (about ${minutes} min left)`, i, todo.length);
-      try {
-        const log = await client.attackLog(todo[i].code);
-        if (log) {
-          logs.set(todo[i].code, log);
-          await cache.put(todo[i].code, log);
-        }
-      } catch (e) {
-        if (e instanceof TornError && FATAL.has(e.code)) throw e;
-        // anything else: skip this log and keep going
-      }
-      if (i % 20 === 19) render();
-    }
-    render();
-    setPartial(logs, wantedCount);
+    state = { client, attacks, logs: new Map(), cache: await openCache(), type: 'mugs', result: null };
+    await fetchMissingLogs();
   } catch (e) {
     setError(e.message);
     render();
-    if (state && wantedCount) setPartial(state.logs, wantedCount);
   } finally {
-    $('working').hidden = true;
-    $('analyze').disabled = false;
+    setBusy(false);
+  }
+}
+
+async function switchType(type) {
+  if (busy || !state || type === state.type) return;
+  cancelled = false;
+  setError(null);
+  $('drill').hidden = true;
+  state.type = type;
+  showType(type);
+  setBusy(true);
+  try {
+    setProgress('Checking which fight logs are needed…');
+    await fetchMissingLogs();
+  } catch (e) {
+    setError(e.message);
+    render();
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -144,6 +177,7 @@ $('start-form').addEventListener('submit', (e) => {
 $('remember').addEventListener('change', () => { if (!$('remember').checked) storedKey.clear(); });
 $('cancel').addEventListener('click', () => { cancelled = true; });
 $('only-strong').addEventListener('change', render);
+for (const b of document.querySelectorAll('.types button')) b.addEventListener('click', () => switchType(b.dataset.type));
 $('clear').addEventListener('click', async () => {
   await (await openCache()).clear();
   storedKey.clear();
