@@ -1,6 +1,6 @@
 // Fingerprints fights and scores visible attackers as suspects for stealthed mugs.
 // Pure functions: no network, no DOM.
-import { parseLog } from './parse.js?v=3';
+import { parseLog } from './parse.js?v=4';
 
 export const DAY = 86400;
 const WINDOW = 14 * DAY;
@@ -224,6 +224,66 @@ export function logsNeeded(attacks, type) {
   return attacks.filter((a) => a.attacker || wanted(a.result));
 }
 
+// --- Repeat attackers: stealthed hits that look like one unnamed person ---
+
+const GROUP_FF = 0.05;
+
+function sameAttacker(a, b) {
+  if (a.logMissing || b.logMissing || a.ff == null || b.ff == null) return false;
+  const wb = realWeapons(b);
+  if (!realWeapons(a).some((w) => wb.includes(w))) return false;
+  if (Math.round(Math.abs(a.ff - b.ff) * 100) / 100 > GROUP_FF) return false;
+  if (Math.abs(a.started - b.started) > WINDOW) return false;
+  return (a.respect > 0) === (b.respect > 0);
+}
+
+// Possible identity from direct, unambiguous Medium/High matches only. Never claims the other hits.
+function groupIdentity(members) {
+  const named = new Map();
+  let matched = 0;
+  for (const m of members) {
+    const top = m.suspects[0];
+    if (!top || m.ambiguous || top.confidence === 'Low') continue;
+    matched += 1;
+    named.set(top.candidate.id, top.candidate.name);
+  }
+  if (named.size === 0) return null;
+  if (named.size > 1) return { kind: 'conflict', names: [...named.values()].sort() };
+  const [[id, name]] = named;
+  return { kind: 'possible', id, name, matched, total: members.length };
+}
+
+const groupLetter = (i) => (i < 26 ? String.fromCharCode(65 + i) : String(i + 1));
+
+// `results` newest first. Complete linkage: a hit joins a group only if it matches every member.
+export function groupAttacks(results) {
+  const groups = [];
+  for (const r of results) {
+    const g = groups.find((members) => members.every((m) => sameAttacker(m.mug, r.mug)));
+    if (g) g.push(r);
+    else groups.push([r]);
+  }
+  return groups
+    .filter((members) => members.length >= 2)
+    .map((members, i) => {
+      const ffs = members.map((m) => m.mug.ff);
+      const ffMin = Math.min(...ffs);
+      const ffMax = Math.max(...ffs);
+      const times = members.map((m) => m.mug.started);
+      return {
+        label: `Unknown attacker ${groupLetter(i)}`,
+        members,
+        weapons: [...new Set(members.flatMap((m) => realWeapons(m.mug)))],
+        ffMin,
+        ffMax,
+        edge: ffMin === ffMax && (ffMin === 3 || ffMin === 1),
+        from: Math.min(...times),
+        to: Math.max(...times),
+        identity: groupIdentity(members),
+      };
+    });
+}
+
 // Each result's `mug` is the stealthed attack being explained — a mug unless another type is selected.
 export function analyze(attacks, logs, type = 'mugs') {
   const fingerprints = attacks.map((a) => fingerprint(a, logs.get(a.code)));
@@ -240,5 +300,7 @@ export function analyze(attacks, logs, type = 'mugs') {
     const ambiguous = suspects.length > 1 && suspects[0].confidence !== 'Low' && suspects[0].confidence === suspects[1].confidence;
     return { mug, suspects, ambiguous };
   });
-  return { results, candidates, fingerprints, summary: { ...summarize(results), type }, leaderboard: buildLeaderboard(results) };
+  const groups = groupAttacks(results);
+  for (const g of groups) for (const m of g.members) m.group = g.label;
+  return { results, candidates, fingerprints, groups, summary: { ...summarize(results), type }, leaderboard: buildLeaderboard(results) };
 }

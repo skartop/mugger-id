@@ -1,7 +1,7 @@
-import { createClient, TornError } from './torn.js?v=3';
-import { openCache } from './cache.js?v=3';
-import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js?v=3';
-import { renderSummary, renderLeaderboard, renderMugList, renderDrilldown } from './ui.js?v=3';
+import { createClient, TornError } from './torn.js?v=4';
+import { openCache } from './cache.js?v=4';
+import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js?v=4';
+import { renderSummary, renderLeaderboard, renderGroups, renderMugList, renderDrilldown } from './ui.js?v=4';
 
 const KEY_STORE = 'mugger-id:key';
 const $ = (id) => document.getElementById(id);
@@ -39,6 +39,7 @@ function render() {
   $('list-title').textContent = `Stealthed ${ATTACK_TYPES[state.type].many}`;
   renderSummary($('summary'), state.result);
   renderLeaderboard($('leaderboard'), state.result);
+  renderGroups($('groups'), state.result, { onSelect: openDrill });
   renderMugList($('mugs'), state.result, { onlyStrong: $('only-strong').checked, onSelect: openDrill });
   setPartial();
 }
@@ -78,6 +79,7 @@ function openDrill(row) {
   renderDrilldown(el, row, {
     logFor: (code) => state.logs.get(code),
     fingerprints: state.result.fingerprints,
+    groups: state.result.groups,
     loadProfile,
     onClose: () => { el.hidden = true; },
   });

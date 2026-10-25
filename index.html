@@ -92,6 +92,12 @@
   .types button { border: 0; border-right: 1px solid var(--edge); border-radius: 0; }
   .types button:last-child { border-right: 0; }
   .types button[aria-pressed="true"] { background: linear-gradient(#93bd3a, var(--green-dark)); color: #ffffff; font-weight: 700; text-shadow: 0 1px 0 rgba(0, 0, 0, .5); }
+  details.group { border-bottom: 1px solid var(--line); padding-block: .5rem; }
+  details.group:last-child { border-bottom: 0; }
+  details.group > p { margin: .4rem 0 .2rem; }
+  ul.members { margin: .2rem 0 0; padding-left: 1.2rem; }
+  button.link { background: none; border: 0; padding: .15rem 0; color: var(--green); text-align: left; cursor: pointer; }
+  button.link:hover { background: none; color: #a2cc45; text-decoration: underline; }
   .drill-head { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
   .drill-head h3 { margin: 0; font-size: 1rem; }
   ol.log { padding-left: 1.6rem; font-size: .9rem; background: #232323; border: 1px solid var(--edge); border-radius: 3px; padding-block: .5rem; }
@@ -176,6 +182,10 @@
       <div id="leaderboard"></div>
     </section>
     <section class="panel">
+      <h2 class="bar">Repeat attackers <span class="muted">(stealthed hits grouped by weapon and fair fight)</span></h2>
+      <div id="groups"></div>
+    </section>
+    <section class="panel">
       <h2 class="bar" id="list-title">Stealthed mugs</h2>
       <label class="check" style="margin-bottom:.5rem"><input id="only-strong" type="checkbox"> Only show High and Medium suspects</label>
       <div id="mugs"></div>
@@ -187,6 +197,6 @@
   <footer>Not affiliated with Torn. Source code is public so you can check exactly where your key goes.</footer>
 </main>
 
-<script type="module" src="src/app.js?v=3"></script>
+<script type="module" src="src/app.js?v=4"></script>
 </body>
 </html>
