@@ -22,7 +22,7 @@ function opts(fetchFn, extra = {}) {
 test('sends the key in the Authorization header, never in the URL', async () => {
   const f = fakeFetch([{ info: { access: { level: 3, type: 'Limited Access' } } }]);
   const info = await createClient('ABCDEFGHIJKLMNOP', opts(f)).keyInfo();
-  assert.deepEqual(info, { level: 3, type: 'Limited Access' });
+  assert.deepEqual(info, { level: 3, type: 'Limited Access', faction: false });
   assert.equal(f.calls[0].url, 'https://api.torn.com/v2/key/info');
   assert.equal(f.calls[0].init.headers.Authorization, 'ApiKey ABCDEFGHIJKLMNOP');
   assert.ok(!f.calls[0].url.includes('ABCDEFGHIJKLMNOP'));
@@ -94,4 +94,29 @@ test('retries Torn backend errors (code 17) twice, then gives up', async () => {
   const bad = fakeFetch([err, err, err]);
   await assert.rejects(createClient('k', opts(bad)).keyInfo(), (e) => e instanceof TornError && e.code === 17);
   assert.equal(bad.calls.length, 3);
+});
+
+test('keyInfo reports faction access', async () => {
+  const yes = fakeFetch([{ info: { access: { level: 3, type: 'Limited Access', faction: true } } }]);
+  assert.equal((await createClient('k', opts(yes)).keyInfo()).faction, true);
+  const no = fakeFetch([{ info: { access: { level: 3, type: 'Limited Access' } } }]);
+  assert.equal((await createClient('k', opts(no)).keyInfo()).faction, false);
+});
+
+test('factionAttacks pages the faction feed', async () => {
+  const page1 = Array.from({ length: 100 }, (_, i) => ({ id: i, started: 1_999_900 - i }));
+  const page2 = [{ id: 99, started: 1_999_801 }, { id: 100, started: 1_999_700 }];
+  const f = fakeFetch([{ attacks: page1 }, { attacks: page2 }]);
+  const attacks = await createClient('k', opts(f, { now: () => 2_000_000_000 })).factionAttacks(1_000_000);
+  assert.equal(attacks.length, 101);
+  assert.equal(attacks[0].started, 1_999_900);
+  assert.ok(f.calls[0].url.endsWith('/faction/attacks?filters=incoming&sort=DESC&limit=100&from=1000000&to=2000000'));
+  assert.ok(f.calls[1].url.endsWith('&to=1999802'));
+  assert.equal(f.calls.length, 2);
+});
+
+test('factionMembers maps id and name', async () => {
+  const f = fakeFetch([{ members: [{ id: 1, name: 'A', level: 3 }] }]);
+  assert.deepEqual(await createClient('k', opts(f)).factionMembers(), [{ id: 1, name: 'A' }]);
+  assert.ok(f.calls[0].url.endsWith('/faction/members'));
 });

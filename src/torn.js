@@ -65,14 +65,14 @@ export function createClient(key, opts = {}) {
 
   async function keyInfo() {
     const access = (await get('/key/info')).info?.access ?? {};
-    return { level: access.level ?? 0, type: access.type ?? 'Unknown' };
+    return { level: access.level ?? 0, type: access.type ?? 'Unknown', faction: access.faction === true };
   }
 
-  async function incomingAttacks(fromTs, onProgress) {
+  async function pageAttacks(basePath, fromTs, onProgress) {
     const seen = new Map();
     let to = Math.floor(now() / 1000);
     for (;;) {
-      const page = (await get(`/user/attacks?filters=incoming&sort=DESC&limit=100&from=${fromTs}&to=${to}`)).attacks ?? [];
+      const page = (await get(`${basePath}?filters=incoming&sort=DESC&limit=100&from=${fromTs}&to=${to}`)).attacks ?? [];
       const before = seen.size;
       for (const a of page) if (a.started >= fromTs) seen.set(a.id, a);
       onProgress?.(seen.size);
@@ -86,11 +86,15 @@ export function createClient(key, opts = {}) {
     return [...seen.values()].sort((a, b) => b.started - a.started);
   }
 
+  const incomingAttacks = (fromTs, onProgress) => pageAttacks('/user/attacks', fromTs, onProgress);
+  const factionAttacks = (fromTs, onProgress) => pageAttacks('/faction/attacks', fromTs, onProgress);
+  const factionMembers = async () => ((await get('/faction/members')).members ?? []).map((m) => ({ id: m.id, name: m.name }));
+
   const attackLog = async (code) => {
     const log = (await get(`/torn/attacklog?log=${encodeURIComponent(code)}`)).attacklog;
     return Array.isArray(log?.log) ? log : null;
   };
   const profile = async (id) => (await get(`/user/${id}/profile`)).profile;
 
-  return { get, keyInfo, incomingAttacks, attackLog, profile };
+  return { get, keyInfo, incomingAttacks, factionAttacks, factionMembers, attackLog, profile };
 }
