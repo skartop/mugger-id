@@ -11,7 +11,7 @@ export function player(id, name, faction) {
   return { id, name, level: 50, faction: faction ? { id: id + 50000, name: faction } : null };
 }
 
-export function attack({ attacker = null, at, result = 'Mugged', ff = 1, overseas = 1, respect = 0 }) {
+export function attack({ attacker = null, at, result = 'Mugged', ff = 1, overseas = 1, respect = 0, defender = MEMBER }) {
   seq += 1;
   return {
     id: 900000 + seq,
@@ -19,7 +19,7 @@ export function attack({ attacker = null, at, result = 'Mugged', ff = 1, oversea
     started: at,
     ended: at + 5,
     attacker,
-    defender: { id: MEMBER.id, name: MEMBER.name, level: 40, faction: { id: 1, name: 'Home Faction' } },
+    defender: { id: defender.id, name: defender.name, level: 40, faction: { id: 1, name: 'Home Faction' } },
     result,
     respect_gain: respect,
     respect_loss: 0,
@@ -30,14 +30,14 @@ export function attack({ attacker = null, at, result = 'Mugged', ff = 1, oversea
   };
 }
 
-// lines: [action, text]; '{a}' = attacker display name ('Someone' when stealthed), '{d}' = 'membera'
-// (lower case on purpose: real logs sometimes lower-case the defender's name).
+// lines: [action, text]; '{a}' = attacker display name ('Someone' when stealthed), '{d}' = the defender's name
+// in lower case (on purpose: real logs sometimes lower-case the defender's name).
 export function attacklog(att, lines) {
   const a = att.attacker ? att.attacker.name : 'Someone';
   return {
     log: lines.map(([action, text], i) => ({
       action,
-      text: text.replaceAll('{a}', a).replaceAll('{d}', 'membera'),
+      text: text.replaceAll('{a}', a).replaceAll('{d}', att.defender.name.toLowerCase()),
       timestamp: att.started + i,
       icon: '',
       attacker: null,

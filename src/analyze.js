@@ -17,6 +17,7 @@ export function fingerprint(attack, attacklog) {
     started: attack.started,
     result: attack.result,
     stealthed: attack.attacker == null,
+    defender: { id: attack.defender?.id ?? null, name: attack.defender?.name ?? null },
     attacker: attack.attacker
       ? { id: attack.attacker.id, name: attack.attacker.name, faction: attack.attacker.faction?.name ?? null }
       : null,
@@ -101,10 +102,14 @@ function scoreOf(s) {
   return (pts[s.weapon] || 0) + (pts[s.ff] || 0) + (pts[s.time] || 0) + (s.damage ? 1 : 0) + (s.overseas ? 1 : 0);
 }
 
-export function scoreCandidate(mug, cand, weights) {
+export function scoreCandidate(mug, cand, weights, opts = {}) {
   const reasons = [];
   const signals = { weapon: 'none', ff: 'none', time: 'none', faction: 'ok', damage: false, overseas: false };
   const gap = gapTo(mug);
+  const pooled = opts.pooled === true;
+  const sameMember = (f) => f.defender?.id === mug.defender?.id;
+  // Pooled only: no visible fight on this member near the mug, so fair fight cannot be compared.
+  const crossMember = pooled && !cand.fights.some((f) => sameMember(f) && gap(f) <= WINDOW);
 
   const sWeapons = realWeapons(mug);
   if (mug.logMissing) reasons.push('fight log unavailable — weapons unknown');
@@ -120,7 +125,12 @@ export function scoreCandidate(mug, cand, weights) {
       const best = shared.reduce((a, b) => (eff(b) > eff(a) ? b : a));
       signals.weapon = eff(best) >= 1 ? 'strong' : 'weak';
       const n = cand.fights.filter((f) => f.weapons[best]).length;
-      reasons.push(`${best} used in ${n} visible fight${n === 1 ? '' : 's'}${signals.weapon === 'weak' ? ' (common weapon)' : ''}`);
+      if (crossMember) {
+        const others = new Set(cand.fights.filter((f) => f.weapons[best] && !sameMember(f)).map((f) => f.defender?.id)).size;
+        reasons.push(`${best} seen on ${others} other member${others === 1 ? '' : 's'}${signals.weapon === 'weak' ? ' (common weapon)' : ''}`);
+      } else {
+        reasons.push(`${best} used in ${n} visible fight${n === 1 ? '' : 's'}${signals.weapon === 'weak' ? ' (common weapon)' : ''}`);
+      }
     } else if (cand.fights.every((f) => f.logMissing)) {
       reasons.push('no fight logs loaded for this player');
     } else {
@@ -129,7 +139,8 @@ export function scoreCandidate(mug, cand, weights) {
     }
   }
 
-  const near = cand.fights.filter((f) => f.ff != null && gap(f) <= WINDOW);
+  // Pooled: fair fight is only comparable between fights on the same member.
+  const near = cand.fights.filter((f) => f.ff != null && gap(f) <= WINDOW && (!pooled || sameMember(f)));
   if (mug.ff != null && near.length) {
     const closest = near.reduce((a, b) => (Math.abs(b.ff - mug.ff) < Math.abs(a.ff - mug.ff) ? b : a));
     const diff = Math.round(Math.abs(closest.ff - mug.ff) * 100) / 100;
@@ -178,21 +189,29 @@ export function scoreCandidate(mug, cand, weights) {
     reasons.push('also attacking abroad around then');
   }
 
-  return { signals, confidence: confidenceOf(signals, sWeapons.length > 0), score: scoreOf(signals), reasons };
+  if (crossMember) reasons.push('FF not comparable (different member)');
+  let confidence = confidenceOf(signals, sWeapons.length > 0);
+  // Cross-member evidence needs a distinctive weapon to reach Medium.
+  if (crossMember && confidence === 'Medium' && signals.weapon !== 'strong') confidence = 'Low';
+
+  return { signals, confidence, score: scoreOf(signals), reasons, crossMember };
 }
 
-function summarize(results) {
+function summarize(results, pooled = false) {
   const byConfidence = { High: 0, Medium: 0, Low: 0, None: 0 };
   let total = 0;
   for (const r of results) {
     total += r.mug.mugAmount ?? 0;
     byConfidence[r.suspects[0]?.confidence ?? 'None'] += 1;
   }
-  return { count: results.length, total, byConfidence, ambiguous: results.filter((r) => r.ambiguous).length };
+  const summary = { count: results.length, total, byConfidence, ambiguous: results.filter((r) => r.ambiguous).length };
+  if (pooled) summary.members = new Set(results.map((r) => r.mug.defender.id)).size;
+  return summary;
 }
 
-function buildLeaderboard(results) {
+function buildLeaderboard(results, pooled = false) {
   const rows = new Map();
+  const hitMembers = new Map(); // suspect id -> distinct defenders
   for (const { mug, suspects, ambiguous } of results) {
     const top = suspects[0];
     if (!top || ambiguous || top.confidence === 'Low') continue;
@@ -201,6 +220,12 @@ function buildLeaderboard(results) {
     row.total += mug.mugAmount ?? 0;
     if (RANK[top.confidence] > RANK[row.best]) row.best = top.confidence;
     rows.set(top.candidate.id, row);
+    if (pooled) {
+      const seen = hitMembers.get(top.candidate.id) ?? new Set();
+      seen.add(mug.defender.id);
+      hitMembers.set(top.candidate.id, seen);
+      row.members = seen.size;
+    }
   }
   return [...rows.values()].sort((a, b) => RANK[b.best] - RANK[a.best] || b.hits - a.hits || b.total - a.total);
 }
@@ -219,9 +244,36 @@ const ofType = (type) => {
 };
 
 // Logs to fetch for a type: every visible attack (the candidates) plus the stealthed attacks of that type.
-export function logsNeeded(attacks, type) {
+export function logsNeeded(attacks, type, opts = {}) {
   const wanted = ofType(type);
-  return attacks.filter((a) => a.attacker || wanted(a.result));
+  if (!opts.pooled) return attacks.filter((a) => a.attacker || wanted(a.result));
+  // Pooled: candidates only matter within 14 days of a stealthed attack of this type (any member).
+  const times = attacks.filter((a) => !a.attacker && wanted(a.result)).map((a) => a.started).sort((x, y) => x - y);
+  const nearStealthed = (t) => {
+    let lo = 0;
+    let hi = times.length; // first index with time >= t - WINDOW
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid] < t - WINDOW) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < times.length && times[lo] <= t + WINDOW;
+  };
+  return attacks.filter((a) => (a.attacker ? nearStealthed(a.started) : wanted(a.result)));
+}
+
+// Time to fetch the fight logs not already cached (about 0.75 s each). `needed`: attacks or attack codes.
+export function scanEstimate(needed, cachedCodes) {
+  const codeOf = (n) => (typeof n === 'string' ? n : n.code);
+  const missing = needed.filter((n) => !cachedCodes.has(codeOf(n))).length;
+  return { needed: needed.length, missing, seconds: missing * 0.75 };
+}
+
+export function formatDuration(seconds) {
+  if (seconds < 60) return 'under a minute';
+  const minutes = Math.ceil(seconds / 60);
+  if (seconds < 3600) return `about ${minutes} min`;
+  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 }
 
 // --- Repeat attackers: stealthed hits that look like one unnamed person ---
@@ -229,6 +281,7 @@ export function logsNeeded(attacks, type) {
 const GROUP_FF = 0.05;
 
 function sameAttacker(a, b) {
+  if (a.defender?.id !== b.defender?.id) return false; // fair fight is only comparable on one member
   if (a.logMissing || b.logMissing || a.ff == null || b.ff == null) return false;
   const wb = realWeapons(b);
   if (!realWeapons(a).some((w) => wb.includes(w))) return false;
@@ -285,15 +338,19 @@ export function groupAttacks(results) {
 }
 
 // Each result's `mug` is the stealthed attack being explained — a mug unless another type is selected.
-export function analyze(attacks, logs, type = 'mugs') {
+// opts.pooled: faction scan (candidates from every member's attacks). opts.member (pooled only): show only
+// stealthed attacks on that defender, still scored against the pooled candidates.
+export function analyze(attacks, logs, type = 'mugs', opts = {}) {
+  const pooled = opts.pooled === true;
   const fingerprints = attacks.map((a) => fingerprint(a, logs.get(a.code)));
   const candidates = buildCandidates(fingerprints);
   const wanted = ofType(type);
-  const stealthed = fingerprints.filter((f) => f.stealthed && wanted(f.result)).sort((a, b) => b.started - a.started);
+  const inView = (f) => !pooled || opts.member == null || f.defender.id === opts.member;
+  const stealthed = fingerprints.filter((f) => f.stealthed && wanted(f.result) && inView(f)).sort((a, b) => b.started - a.started);
   const results = stealthed.map((mug) => {
     const weights = weaponWeights(mug, candidates);
     const suspects = candidates
-      .map((c) => ({ candidate: { id: c.id, name: c.name, faction: c.faction }, ...scoreCandidate(mug, c, weights) }))
+      .map((c) => ({ candidate: { id: c.id, name: c.name, faction: c.faction }, ...scoreCandidate(mug, c, weights, { pooled }) }))
       .filter((s) => s.confidence)
       .sort((a, b) => RANK[b.confidence] - RANK[a.confidence] || b.score - a.score)
       .slice(0, 3);
@@ -302,5 +359,5 @@ export function analyze(attacks, logs, type = 'mugs') {
   });
   const groups = groupAttacks(results);
   for (const g of groups) for (const m of g.members) m.group = g.label;
-  return { results, candidates, fingerprints, groups, summary: { ...summarize(results), type }, leaderboard: buildLeaderboard(results) };
+  return { results, candidates, fingerprints, groups, summary: { ...summarize(results, pooled), type }, leaderboard: buildLeaderboard(results, pooled) };
 }
