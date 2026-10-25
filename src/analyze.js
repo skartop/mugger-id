@@ -107,12 +107,13 @@ export function scoreCandidate(mug, cand, weights, opts = {}) {
   const signals = { weapon: 'none', ff: 'none', time: 'none', faction: 'ok', damage: false, overseas: false };
   const gap = gapTo(mug);
   const pooled = opts.pooled === true;
-  const sameMember = (f) => f.defender?.id === mug.defender?.id;
+  const sameMember = (f) => f.defender?.id != null && mug.defender?.id != null && f.defender.id === mug.defender.id;
   // Pooled only: no visible fight on this member near the mug, so fair fight cannot be compared.
   const crossMember = pooled && !cand.fights.some((f) => sameMember(f) && gap(f) <= WINDOW);
 
   const sWeapons = realWeapons(mug);
   if (mug.logMissing) reasons.push('fight log unavailable — weapons unknown');
+  let sameMemberWeapon = false; // the shared weapon also appears in one of this candidate's fights on the same member
   const inWindow = cand.fights.some((f) => gap(f) <= WINDOW);
   // A player with no in-window fights was not counted in the weights, so assume one more user.
   const eff = (w) => {
@@ -125,8 +126,11 @@ export function scoreCandidate(mug, cand, weights, opts = {}) {
       const best = shared.reduce((a, b) => (eff(b) > eff(a) ? b : a));
       signals.weapon = eff(best) >= 1 ? 'strong' : 'weak';
       const n = cand.fights.filter((f) => f.weapons[best]).length;
-      if (crossMember) {
-        const others = new Set(cand.fights.filter((f) => f.weapons[best] && !sameMember(f)).map((f) => f.defender?.id)).size;
+      sameMemberWeapon = cand.fights.some((f) => f.weapons[best] && sameMember(f));
+      const others = pooled && !sameMemberWeapon
+        ? new Set(cand.fights.filter((f) => f.weapons[best] && f.defender?.id != null).map((f) => f.defender.id)).size
+        : 0;
+      if (others > 0) {
         reasons.push(`${best} seen on ${others} other member${others === 1 ? '' : 's'}${signals.weapon === 'weak' ? ' (common weapon)' : ''}`);
       } else {
         reasons.push(`${best} used in ${n} visible fight${n === 1 ? '' : 's'}${signals.weapon === 'weak' ? ' (common weapon)' : ''}`);
@@ -191,8 +195,12 @@ export function scoreCandidate(mug, cand, weights, opts = {}) {
 
   if (crossMember) reasons.push('FF not comparable (different member)');
   let confidence = confidenceOf(signals, sWeapons.length > 0);
-  // Cross-member evidence needs a distinctive weapon to reach Medium.
-  if (crossMember && confidence === 'Medium' && signals.weapon !== 'strong') confidence = 'Low';
+  // Pooled: Medium needs a distinctive weapon, a same-member FF match, or the weapon seen on this very member.
+  // A same-member fight that shows none of those proves nothing, so it must not unlock Medium.
+  if (pooled && confidence === 'Medium') {
+    const ffMatch = signals.ff === 'strong' || signals.ff === 'moderate';
+    if (signals.weapon !== 'strong' && !ffMatch && !sameMemberWeapon) confidence = 'Low';
+  }
 
   return { signals, confidence, score: scoreOf(signals), reasons, crossMember };
 }
@@ -247,8 +255,11 @@ const ofType = (type) => {
 export function logsNeeded(attacks, type, opts = {}) {
   const wanted = ofType(type);
   if (!opts.pooled) return attacks.filter((a) => a.attacker || wanted(a.result));
-  // Pooled: candidates only matter within 14 days of a stealthed attack of this type (any member).
-  const times = attacks.filter((a) => !a.attacker && wanted(a.result)).map((a) => a.started).sort((x, y) => x - y);
+  // Pooled: keep every stealthed attack of this type (from `since` on), and every visible attack by an attacker
+  // with at least one visible fight within 14 days of one of them (any member). Selecting by attacker, not by
+  // date, keeps each kept attacker's fights complete, so weapon rarity matches personal results.
+  const since = opts.since ?? -Infinity;
+  const times = attacks.filter((a) => !a.attacker && wanted(a.result) && a.started >= since).map((a) => a.started).sort((x, y) => x - y);
   const nearStealthed = (t) => {
     let lo = 0;
     let hi = times.length; // first index with time >= t - WINDOW
@@ -259,7 +270,8 @@ export function logsNeeded(attacks, type, opts = {}) {
     }
     return lo < times.length && times[lo] <= t + WINDOW;
   };
-  return attacks.filter((a) => (a.attacker ? nearStealthed(a.started) : wanted(a.result)));
+  const relevant = new Set(attacks.filter((a) => a.attacker && nearStealthed(a.started)).map((a) => a.attacker.id));
+  return attacks.filter((a) => (a.attacker ? relevant.has(a.attacker.id) : wanted(a.result) && a.started >= since));
 }
 
 // Time to fetch the fight logs not already cached (about 0.75 s each). `needed`: attacks or attack codes.
@@ -272,8 +284,8 @@ export function scanEstimate(needed, cachedCodes) {
 export function formatDuration(seconds) {
   if (seconds < 60) return 'under a minute';
   const minutes = Math.ceil(seconds / 60);
-  if (seconds < 3600) return `about ${minutes} min`;
-  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+  if (minutes < 60) return `about ${minutes} min`;
+  return `about ${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 }
 
 // --- Repeat attackers: stealthed hits that look like one unnamed person ---
@@ -281,7 +293,7 @@ export function formatDuration(seconds) {
 const GROUP_FF = 0.05;
 
 function sameAttacker(a, b) {
-  if (a.defender?.id !== b.defender?.id) return false; // fair fight is only comparable on one member
+  if (a.defender?.id == null || a.defender?.id !== b.defender?.id) return false; // fair fight is only comparable on one member
   if (a.logMissing || b.logMissing || a.ff == null || b.ff == null) return false;
   const wb = realWeapons(b);
   if (!realWeapons(a).some((w) => wb.includes(w))) return false;
@@ -338,6 +350,7 @@ export function groupAttacks(results) {
 }
 
 // Each result's `mug` is the stealthed attack being explained — a mug unless another type is selected.
+// opts.since (unix seconds): ignore stealthed attacks older than this.
 // opts.pooled: faction scan (candidates from every member's attacks). opts.member (pooled only): show only
 // stealthed attacks on that defender, still scored against the pooled candidates.
 export function analyze(attacks, logs, type = 'mugs', opts = {}) {
@@ -346,7 +359,9 @@ export function analyze(attacks, logs, type = 'mugs', opts = {}) {
   const candidates = buildCandidates(fingerprints);
   const wanted = ofType(type);
   const inView = (f) => !pooled || opts.member == null || f.defender.id === opts.member;
-  const stealthed = fingerprints.filter((f) => f.stealthed && wanted(f.result) && inView(f)).sort((a, b) => b.started - a.started);
+  // Stealthed attacks before `since` were only paged for the visible fights around them: never score them.
+  const inRange = (f) => opts.since == null || f.started >= opts.since;
+  const stealthed = fingerprints.filter((f) => f.stealthed && wanted(f.result) && inView(f) && inRange(f)).sort((a, b) => b.started - a.started);
   const results = stealthed.map((mug) => {
     const weights = weaponWeights(mug, candidates);
     const suspects = candidates

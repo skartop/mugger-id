@@ -15,6 +15,14 @@ server: this repository is the whole app, so you can check every line.
 
 A **Limited** key is enough.
 
+## Faction scan (officers)
+
+Optional. If your key has faction access and your faction role has API access, a "Faction scan"
+panel appears after Analyze. It pools every member's attacks so one member's open fight can help
+identify a stealthed hit on another. The first run can take a long time, so the page shows an
+estimate first and only starts when you press Start (you can cancel; fetched logs are kept).
+Everything stays on your device: nothing is uploaded and there is no server.
+
 ## Run the tests
 
     npm test

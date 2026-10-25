@@ -15,7 +15,7 @@ const FATAL = new Set([2, 5, 8, 9, 10, 13, 16, 18]); // errors where continuing 
 let cancelled = false;
 let busy = false;
 // { client, attacks, logs, cache, type, result, fromTs, mode: 'personal' | 'faction', view: 'faction' | 'member',
-//   member, members, fattacks }. Fight logs for both modes share one `logs` map (keyed by attack code).
+//   member, members, fattacks, factionLoaded }. Fight logs for both modes share one `logs` map (keyed by attack code).
 let state = null;
 const profiles = new Map();
 
@@ -39,7 +39,7 @@ function render() {
   const faction = state.mode === 'faction';
   if (faction) refreshPicker();
   state.result = faction
-    ? analyze(state.fattacks, state.logs, state.type, { pooled: true, member: state.view === 'member' ? (state.member ?? -1) : null })
+    ? analyze(state.fattacks, state.logs, state.type, { pooled: true, since: state.fromTs, member: state.view === 'member' ? (state.member ?? -1) : null })
     : analyze(state.attacks, state.logs, state.type);
   // Member column and "on <member>" only in the pooled faction view; member view reads like personal mode.
   const showMember = faction && state.view === 'faction';
@@ -54,7 +54,7 @@ function render() {
 }
 
 const neededLogs = () => (state.mode === 'faction'
-  ? logsNeeded(state.fattacks, state.type, { pooled: true })
+  ? logsNeeded(state.fattacks, state.type, { pooled: true, since: state.fromTs })
   : logsNeeded(state.attacks, state.type));
 
 // Members with at least one stealthed attack of the selected type, most first.
@@ -62,8 +62,8 @@ function stealthedByMember() {
   const allowed = ATTACK_TYPES[state.type].results;
   const counts = new Map();
   for (const a of state.fattacks) {
-    if (a.attacker || !(allowed === null || allowed.includes(a.result))) continue;
-    counts.set(a.defender?.id, (counts.get(a.defender?.id) ?? 0) + 1);
+    if (a.attacker || a.defender?.id == null || a.started < state.fromTs || !(allowed === null || allowed.includes(a.result))) continue;
+    counts.set(a.defender.id, (counts.get(a.defender.id) ?? 0) + 1);
   }
   return [...counts].sort((a, b) => b[1] - a[1]);
 }
@@ -157,7 +157,8 @@ async function fetchMissingLogs() {
       if (e instanceof TornError && FATAL.has(e.code)) throw e;
       // anything else: skip this log and keep going
     }
-    if (i % 20 === 19) render();
+    const every = state.mode === 'faction' ? 100 : 20; // pooled analysis is heavier: render less often
+    if (i % every === every - 1) render();
   }
   render();
 }
@@ -188,7 +189,7 @@ async function run(key, days) {
     const attacks = await client.incomingAttacks(fromTs, (n) => setProgress(`Loading your incoming attacks… ${n}`));
     state = {
       client, attacks, logs: new Map(), cache: await openCache(), type: 'mugs', result: null, fromTs,
-      mode: 'personal', view: 'faction', member: null, members: [], fattacks: [],
+      mode: 'personal', view: 'faction', member: null, members: [], fattacks: [], factionLoaded: false,
     };
     await fetchMissingLogs();
   } catch (e) {
@@ -210,7 +211,7 @@ function resetFactionPanel() {
 
 // Estimate for the selected type: logs already on this device (memory or cache) cost nothing.
 async function estimateFaction() {
-  const needed = logsNeeded(state.fattacks, state.type, { pooled: true });
+  const needed = logsNeeded(state.fattacks, state.type, { pooled: true, since: state.fromTs });
   const cachedCodes = new Set();
   for (const a of needed) {
     if (state.logs.has(a.code)) { cachedCodes.add(a.code); continue; }
@@ -229,6 +230,21 @@ function showEstimate(est) {
   $('scan-start').hidden = false;
 }
 
+// Estimate for the current type; Start is only offered while something is still missing.
+async function refreshEstimate() {
+  const est = await estimateFaction();
+  showEstimate(est);
+  if (est.missing === 0) $('scan-start').hidden = true;
+}
+
+const NO_FACTION_ACCESS = "This key can't read your faction's attacks. Your faction role needs API access (ask a leader to enable it in faction settings), and the key needs faction access.";
+
+function showScanError(prefix, e) {
+  $('scan-estimate').textContent = e instanceof TornError && (e.code === 16 || e.code === 7) ? NO_FACTION_ACCESS : `${prefix}${e.message}`;
+  $('scan-estimate').hidden = false;
+  $('scan-start').hidden = true;
+}
+
 async function checkScan() {
   if (busy || !state) return;
   cancelled = false;
@@ -241,13 +257,12 @@ async function checkScan() {
     ]);
     state.fattacks = fattacks;
     state.members = members;
+    state.factionLoaded = true;
     setProgress('Counting fight logs already on this device…');
     showEstimate(await estimateFaction());
   } catch (e) {
     // Personal results stay as they are; the error belongs to the scan.
-    $('scan-estimate').textContent = `Could not check the faction feed: ${e.message}`;
-    $('scan-estimate').hidden = false;
-    $('scan-start').hidden = true;
+    showScanError('Could not check the faction feed: ', e);
   } finally {
     setBusy(false);
   }
@@ -263,8 +278,10 @@ async function startScan() {
   try {
     setProgress('Checking which fight logs are needed…');
     await fetchMissingLogs();
+    setProgress('Counting fight logs already on this device…');
+    await refreshEstimate(); // Start goes away when done; a cancelled scan shows what is left
   } catch (e) {
-    setError(e.message);
+    showScanError('The faction scan stopped: ', e);
     render();
   } finally {
     setBusy(false);
@@ -286,26 +303,19 @@ async function switchType(type) {
   $('drill').hidden = true;
   state.type = type;
   showType(type);
-  if (state.mode === 'faction') {
-    // Counts can be large: show the estimate first and only auto-run when nothing new is needed.
-    setBusy(true);
-    try {
-      setProgress('Counting fight logs already on this device…');
-      const est = await estimateFaction();
-      showEstimate(est);
-      if (est.missing === 0) $('scan-start').hidden = true;
-      render(); // always: title, lists and the partial banner must follow the new type
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-    return;
-  }
   setBusy(true);
   try {
-    setProgress('Checking which fight logs are needed…');
-    await fetchMissingLogs();
+    if (state.mode !== 'faction') {
+      setProgress('Checking which fight logs are needed…');
+      await fetchMissingLogs();
+    }
+    if (state.factionLoaded) {
+      // Counts can be large: re-estimate for the new type (never leave an old estimate or Start showing),
+      // and only offer Start when something is missing.
+      setProgress('Counting fight logs already on this device…');
+      await refreshEstimate();
+    }
+    render(); // always: title, lists and the partial banner must follow the new type
   } catch (e) {
     setError(e.message);
     render();

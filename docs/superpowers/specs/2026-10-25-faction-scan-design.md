@@ -83,9 +83,11 @@ already lets that key see. The "nothing stored anywhere but your device" promise
 
 For the selected attack type across all members:
 - every **stealthed** attack of that type;
-- every **visible** attack that falls within ±14 days of at least one of those stealthed attacks
-  (on any member). Visible attacks outside every window cannot influence a match beyond Low and are
-  skipped.
+- every **visible** attack by an attacker who has at least one visible fight within ±14 days of at
+  least one of those stealthed attacks (on any member). Attackers with no fight near any stealthed
+  attack cannot influence a match beyond Low and are skipped entirely. *(Ruling from the final
+  review: selection is by attacker, not by individual fight date, so a kept attacker's fights are
+  complete and weapon rarity agrees with personal results.)*
 
 ### Matching across members
 

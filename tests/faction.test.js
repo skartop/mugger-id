@@ -90,16 +90,77 @@ test('member view restricts results but keeps pooled suspects', () => {
   assert.equal(r.summary.members, 1);
 });
 
-test('pooled logsNeeded skips visible attacks outside every 14-day window', () => {
+test('pooled logsNeeded selects visible attacks by attacker, not by date', () => {
   const ds = emptyDataset();
   addAttack(ds, { at: T0, ff: 2, respect: 2, defender: MemberA }, [...knifeLines(), mugLine(100)]);
-  const far = addAttack(ds, { attacker: player(2201, 'FarAttacker', 'Faction F'), at: T0 + 20 * DAY, result: 'Attacked', defender: MemberB }, knifeLines());
-  const near = addAttack(ds, { attacker: player(2202, 'NearAttacker', 'Faction N'), at: T0 + 10 * DAY, result: 'Attacked', defender: MemberB }, knifeLines());
+  const mixedNear = addAttack(ds, { attacker: player(2202, 'MixedAttacker', 'Faction N'), at: T0 + 10 * DAY, result: 'Attacked', defender: MemberB }, knifeLines());
+  const mixedFar = addAttack(ds, { attacker: player(2202, 'MixedAttacker', 'Faction N'), at: T0 + 20 * DAY, result: 'Attacked', defender: MemberB }, knifeLines());
+  const farOnly = addAttack(ds, { attacker: player(2201, 'FarAttacker', 'Faction F'), at: T0 + 20 * DAY, result: 'Attacked', defender: MemberB }, knifeLines());
   const pooledIds = logsNeeded(ds.attacks, 'mugs', { pooled: true }).map((a) => a.id);
-  assert.ok(pooledIds.includes(near.id));
-  assert.ok(!pooledIds.includes(far.id));
+  assert.ok(pooledIds.includes(mixedNear.id));
+  assert.ok(pooledIds.includes(mixedFar.id), 'a far fight of an attacker who also fought near a stealthed attack is kept');
+  assert.ok(!pooledIds.includes(farOnly.id), 'an attacker whose only fight is far away is skipped');
   const plain = logsNeeded(ds.attacks, 'mugs').map((a) => a.id);
-  assert.ok(plain.includes(near.id) && plain.includes(far.id));
+  assert.ok(plain.includes(farOnly.id) && plain.includes(mixedFar.id));
+});
+
+test('pooled analysis ignores stealthed attacks before the look-back', () => {
+  const since = T0 + 30 * DAY;
+  const ds = emptyDataset();
+  const early = addAttack(ds, { at: since - 3 * DAY, ff: 2, respect: 2, defender: MemberA }, [...knifeLines(), mugLine(100)]);
+  const late = addAttack(ds, { at: since + DAY, ff: 3, respect: 2, defender: MemberA }, [...knifeLines(), mugLine(200)]);
+  const visible = addAttack(ds, { attacker: SuspectKnife, at: since - 3 * DAY, result: 'Attacked', ff: 2, respect: 2, defender: MemberB }, knifeLines());
+  const r = pooled(ds, { since });
+  assert.deepEqual(r.results.map((x) => x.mug.id), [late.id]);
+  assert.equal(r.summary.count, 1);
+  assert.equal(r.results[0].suspects[0].candidate.name, 'SuspectKnife', 'the pre-look-back visible fight still counts as evidence');
+  const ids = logsNeeded(ds.attacks, 'mugs', { pooled: true, since }).map((a) => a.id);
+  assert.ok(!ids.includes(early.id));
+  assert.ok(ids.includes(late.id) && ids.includes(visible.id));
+  assert.equal(pooled(ds).results.length, 2);
+});
+
+test('a same-member fight that proves nothing does not unlock cross-member Medium', () => {
+  for (const sameFf of [2.4, null]) {
+    const ds = emptyDataset();
+    const M = T0 + 20 * DAY;
+    const x = player(3001, 'SuspectX', 'Faction X');
+    const z = player(3002, 'OtherZ', 'Faction Z');
+    addAttack(ds, { attacker: x, at: M - 12 * DAY, result: 'Attacked', ff: sameFf, respect: 1, defender: MemberA }, [['hit', '{a} hit {d} with his Fists in the Chest for 150'], ['won', '{a} hit {d} with his Fists in the Stomach for 153']]);
+    addAttack(ds, { attacker: x, at: M - DAY, result: 'Attacked', ff: 2, respect: 1, defender: MemberB }, knifeLines());
+    addAttack(ds, { attacker: z, at: M - DAY, result: 'Attacked', ff: 2, respect: 1, defender: MemberB }, knifeLines());
+    const mug = addAttack(ds, { at: M, ff: 2.6, respect: 2, defender: MemberA }, [...knifeLines(), mugLine(500)]);
+    const r = pooled(ds);
+    const s = r.results.find((q) => q.mug.id === mug.id).suspects.find((q) => q.candidate.name === 'SuspectX');
+    assert.equal(s.confidence, 'Low', `ff ${sameFf}`);
+    assert.ok(s.reasons.some((t) => /seen on 1 other member/.test(t)), s.reasons.join(' / '));
+    assert.ok(!r.leaderboard.some((q) => q.name === 'SuspectX'));
+  }
+});
+
+test('a common weapon seen on the same member keeps v1 Medium', () => {
+  const ds = emptyDataset();
+  const M = T0 + 20 * DAY;
+  const x = player(3001, 'SuspectX', 'Faction X');
+  const z = player(3002, 'OtherZ', 'Faction Z');
+  addAttack(ds, { attacker: x, at: M - 5 * DAY, result: 'Attacked', ff: 2.4, respect: 1, defender: MemberA }, knifeLines());
+  addAttack(ds, { attacker: z, at: M - 5 * DAY, result: 'Attacked', ff: 2, respect: 1, defender: MemberB }, knifeLines());
+  const mug = addAttack(ds, { at: M, ff: 2.6, respect: 2, defender: MemberA }, [...knifeLines(), mugLine(500)]);
+  const s = pooled(ds).results.find((q) => q.mug.id === mug.id).suspects.find((q) => q.candidate.name === 'SuspectX');
+  assert.equal(s.signals.weapon, 'weak');
+  assert.equal(s.confidence, 'Medium');
+  assert.ok(s.reasons.some((t) => t.includes('used in 1 visible fight')));
+});
+
+test('null defender ids never count as the same member', () => {
+  const ds = emptyDataset();
+  const M = T0 + 20 * DAY;
+  const nobody = { id: null, name: 'Nobody' };
+  addAttack(ds, { attacker: SuspectKnife, at: M - DAY, result: 'Attacked', ff: 2.6, respect: 1, defender: nobody }, knifeLines());
+  const mug = addAttack(ds, { at: M, ff: 2.6, respect: 2, defender: nobody }, [...knifeLines(), mugLine(500)]);
+  const s = pooled(ds).results.find((q) => q.mug.id === mug.id).suspects[0];
+  assert.equal(s.signals.ff, 'none');
+  assert.equal(s.crossMember, true);
 });
 
 test('scanEstimate counts only uncached logs', () => {
@@ -111,4 +172,7 @@ test('formatDuration reads in hours for large scans', () => {
   assert.equal(formatDuration(30), 'under a minute');
   assert.equal(formatDuration(61), 'about 2 min');
   assert.equal(formatDuration(4500), 'about 1 h 15 min');
+  assert.equal(formatDuration(3550), 'about 1 h');
+  assert.equal(formatDuration(3600), 'about 1 h');
+  assert.equal(formatDuration(3660), 'about 1 h 1 min');
 });

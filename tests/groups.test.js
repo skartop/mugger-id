@@ -8,7 +8,7 @@ let seq = 0;
 function result({ weapons = { Fiveseven: 2 }, ff = 2.5, at = T0, respect = 2, top = null, ambiguous = false, logMissing = false }) {
   seq += 1;
   return {
-    mug: { id: seq, code: `g${seq}`, started: at, result: 'Mugged', weapons, ff, respect, logMissing, hits: [] },
+    mug: { id: seq, code: `g${seq}`, defender: { id: 1001 }, started: at, result: 'Mugged', weapons, ff, respect, logMissing, hits: [] },
     suspects: top ? [{ candidate: { id: top.id, name: top.name, faction: 'F' }, confidence: top.confidence }] : [],
     ambiguous,
   };

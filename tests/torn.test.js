@@ -120,3 +120,8 @@ test('factionMembers maps id and name', async () => {
   assert.deepEqual(await createClient('k', opts(f)).factionMembers(), [{ id: 1, name: 'A' }]);
   assert.ok(f.calls[0].url.endsWith('/faction/members'));
 });
+
+test('factionMembers accepts an id-keyed object as well as an array', async () => {
+  const f = fakeFetch([{ members: { 1: { id: 1, name: 'A' }, 2: { id: 2, name: 'B' } } }]);
+  assert.deepEqual(await createClient('k', opts(f)).factionMembers(), [{ id: 1, name: 'A' }, { id: 2, name: 'B' }]);
+});

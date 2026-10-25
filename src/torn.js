@@ -88,7 +88,10 @@ export function createClient(key, opts = {}) {
 
   const incomingAttacks = (fromTs, onProgress) => pageAttacks('/user/attacks', fromTs, onProgress);
   const factionAttacks = (fromTs, onProgress) => pageAttacks('/faction/attacks', fromTs, onProgress);
-  const factionMembers = async () => ((await get('/faction/members')).members ?? []).map((m) => ({ id: m.id, name: m.name }));
+  const factionMembers = async () => {
+    const m = (await get('/faction/members')).members;
+    return (Array.isArray(m) ? m : Object.values(m ?? {})).map((x) => ({ id: x.id, name: x.name }));
+  };
 
   const attackLog = async (code) => {
     const log = (await get(`/torn/attacklog?log=${encodeURIComponent(code)}`)).attacklog;
