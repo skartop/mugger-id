@@ -1,7 +1,7 @@
-import { createClient, TornError } from './torn.js?v=4';
-import { openCache } from './cache.js?v=4';
-import { analyze, logsNeeded, ATTACK_TYPES } from './analyze.js?v=4';
-import { renderSummary, renderLeaderboard, renderGroups, renderMugList, renderDrilldown } from './ui.js?v=4';
+import { createClient, TornError } from './torn.js?v=5';
+import { openCache } from './cache.js?v=5';
+import { analyze, logsNeeded, scanEstimate, ATTACK_TYPES, DAY } from './analyze.js?v=5';
+import { renderSummary, renderLeaderboard, renderGroups, renderMugList, renderDrilldown, memberName, estimateText } from './ui.js?v=5';
 
 const KEY_STORE = 'mugger-id:key';
 const $ = (id) => document.getElementById(id);
@@ -14,7 +14,9 @@ const storedKey = {
 const FATAL = new Set([2, 5, 8, 9, 10, 13, 16, 18]); // errors where continuing cannot help
 let cancelled = false;
 let busy = false;
-let state = null; // { client, attacks, logs, cache, type, result }
+// { client, attacks, logs, cache, type, result, fromTs, mode: 'personal' | 'faction', view: 'faction' | 'member',
+//   member, members, fattacks }. Fight logs for both modes share one `logs` map (keyed by attack code).
+let state = null;
 const profiles = new Map();
 
 function setError(message) {
@@ -34,29 +36,72 @@ function setProgress(label, done = 0, total = 0) {
 
 function render() {
   if (!state) return;
-  state.result = analyze(state.attacks, state.logs, state.type);
+  const faction = state.mode === 'faction';
+  if (faction) refreshPicker();
+  state.result = faction
+    ? analyze(state.fattacks, state.logs, state.type, { pooled: true, member: state.view === 'member' ? (state.member ?? -1) : null })
+    : analyze(state.attacks, state.logs, state.type);
+  // Member column and "on <member>" only in the pooled faction view; member view reads like personal mode.
+  const showMember = faction && state.view === 'faction';
+  const nameOf = (id) => memberName(id, state.members, state.fattacks);
   $('results').hidden = false;
   $('list-title').textContent = `Stealthed ${ATTACK_TYPES[state.type].many}`;
-  renderSummary($('summary'), state.result);
-  renderLeaderboard($('leaderboard'), state.result);
-  renderGroups($('groups'), state.result, { onSelect: openDrill });
-  renderMugList($('mugs'), state.result, { onlyStrong: $('only-strong').checked, onSelect: openDrill });
+  renderSummary($('summary'), state.result, { showMember });
+  renderLeaderboard($('leaderboard'), state.result, { showMember });
+  renderGroups($('groups'), state.result, { onSelect: openDrill, showMember, nameOf });
+  renderMugList($('mugs'), state.result, { onlyStrong: $('only-strong').checked, onSelect: openDrill, showMember, nameOf });
   setPartial();
+}
+
+const neededLogs = () => (state.mode === 'faction'
+  ? logsNeeded(state.fattacks, state.type, { pooled: true })
+  : logsNeeded(state.attacks, state.type));
+
+// Members with at least one stealthed attack of the selected type, most first.
+function stealthedByMember() {
+  const allowed = ATTACK_TYPES[state.type].results;
+  const counts = new Map();
+  for (const a of state.fattacks) {
+    if (a.attacker || !(allowed === null || allowed.includes(a.result))) continue;
+    counts.set(a.defender?.id, (counts.get(a.defender?.id) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]);
+}
+
+function refreshPicker() {
+  const entries = stealthedByMember();
+  if (!entries.some(([id]) => id === state.member)) state.member = entries[0]?.[0] ?? null;
+  const picker = $('member-picker');
+  picker.replaceChildren(...entries.map(([id, n]) => {
+    const o = document.createElement('option');
+    o.value = String(id);
+    o.textContent = `${memberName(id, state.members, state.fattacks)} (${n})`;
+    return o;
+  }));
+  if (state.member != null) picker.value = String(state.member);
+  syncFactionControls();
+}
+
+function syncFactionControls() {
+  const faction = state?.mode === 'faction';
+  $('views').hidden = !faction;
+  $('member-picker').hidden = !(faction && state.view === 'member');
+  for (const b of document.querySelectorAll('#views button')) b.setAttribute('aria-pressed', String(b.dataset.view === state?.view));
 }
 
 // Banner while some logs the selected type needs are still missing.
 function setPartial() {
-  const needed = logsNeeded(state.attacks, state.type);
+  const needed = neededLogs();
   const loaded = needed.filter((a) => state.logs.has(a.code)).length;
   const missing = loaded < needed.length;
   $('partial').hidden = !missing;
   $('partial').textContent = missing
-    ? `Partial results — ${loaded} of ${needed.length} fight logs loaded. Confidence may be overstated; run Analyze again to finish.`
+    ? `Partial results — ${loaded} of ${needed.length} fight logs loaded. Confidence may be overstated; ${state.mode === 'faction' ? 'press Start faction scan to finish' : 'run Analyze again to finish'}.`
     : '';
 }
 
 function showType(type) {
-  for (const b of document.querySelectorAll('.types button')) b.setAttribute('aria-pressed', String(b.dataset.type === type));
+  for (const b of document.querySelectorAll('#results .types button')) b.setAttribute('aria-pressed', String(b.dataset.type === type));
 }
 
 function setBusy(on) {
@@ -64,6 +109,7 @@ function setBusy(on) {
   $('working').hidden = !on;
   $('analyze').disabled = on;
   for (const b of document.querySelectorAll('.types button')) b.disabled = on;
+  for (const id of ['scan-check', 'scan-start', 'member-picker']) $(id).disabled = on;
 }
 
 function loadProfile(id) {
@@ -80,6 +126,8 @@ function openDrill(row) {
     logFor: (code) => state.logs.get(code),
     fingerprints: state.result.fingerprints,
     groups: state.result.groups,
+    showMember: state.mode === 'faction',
+    nameOf: (id) => memberName(id, state.members, state.fattacks),
     loadProfile,
     onClose: () => { el.hidden = true; },
   });
@@ -89,7 +137,7 @@ function openDrill(row) {
 // Fetches the logs the selected type still needs (device cache first), rendering as they arrive.
 async function fetchMissingLogs() {
   const todo = [];
-  for (const a of logsNeeded(state.attacks, state.type)) {
+  for (const a of neededLogs()) {
     if (state.logs.has(a.code)) continue;
     const cached = await state.cache.get(a.code);
     if (cached) state.logs.set(a.code, cached);
@@ -120,17 +168,98 @@ async function run(key, days) {
   $('cleared').hidden = true;
   $('drill').hidden = true;
   $('partial').hidden = true;
+  // Analyze is always personal mode; a faction scan is a separate, explicit opt-in.
+  if (state) { state.mode = 'personal'; state.view = 'faction'; }
+  $('faction-panel').hidden = true;
+  resetFactionPanel();
   showType('mugs');
   setBusy(true);
+  let factionAccess = false;
   const client = createClient(key, { onRateLimit: () => setProgress('Torn rate limit reached. Waiting 60 seconds…') });
   try {
     setProgress('Checking your key…');
     const info = await client.keyInfo();
     if (info.level !== 0 && info.level < 3) throw new TornError(16);
+    factionAccess = info.faction;
 
     const fromTs = Math.floor(Date.now() / 1000) - days * 86400;
     const attacks = await client.incomingAttacks(fromTs, (n) => setProgress(`Loading your incoming attacks… ${n}`));
-    state = { client, attacks, logs: new Map(), cache: await openCache(), type: 'mugs', result: null };
+    state = {
+      client, attacks, logs: new Map(), cache: await openCache(), type: 'mugs', result: null, fromTs,
+      mode: 'personal', view: 'faction', member: null, members: [], fattacks: [],
+    };
+    await fetchMissingLogs();
+  } catch (e) {
+    setError(e.message);
+    render();
+  } finally {
+    setBusy(false);
+    $('faction-panel').hidden = !(factionAccess && state);
+  }
+}
+
+function resetFactionPanel() {
+  $('scan-estimate').hidden = true;
+  $('scan-estimate').textContent = '';
+  $('scan-start').hidden = true;
+  $('views').hidden = true;
+  $('member-picker').hidden = true;
+}
+
+// Estimate for the selected type: logs already on this device (memory or cache) cost nothing.
+async function estimateFaction() {
+  const needed = logsNeeded(state.fattacks, state.type, { pooled: true });
+  const cachedCodes = new Set();
+  for (const a of needed) {
+    if (state.logs.has(a.code)) { cachedCodes.add(a.code); continue; }
+    const cached = await state.cache.get(a.code);
+    if (cached) {
+      state.logs.set(a.code, cached);
+      cachedCodes.add(a.code);
+    }
+  }
+  return scanEstimate(needed, cachedCodes);
+}
+
+function showEstimate(est) {
+  $('scan-estimate').textContent = estimateText(state.type, est);
+  $('scan-estimate').hidden = false;
+  $('scan-start').hidden = false;
+}
+
+async function checkScan() {
+  if (busy || !state) return;
+  cancelled = false;
+  setBusy(true);
+  try {
+    setProgress('Loading your faction\u2019s incoming attacks…');
+    const [fattacks, members] = await Promise.all([
+      state.client.factionAttacks(state.fromTs - 14 * DAY, (n) => setProgress(`Loading your faction\u2019s incoming attacks… ${n}`)),
+      state.client.factionMembers(),
+    ]);
+    state.fattacks = fattacks;
+    state.members = members;
+    setProgress('Counting fight logs already on this device…');
+    showEstimate(await estimateFaction());
+  } catch (e) {
+    // Personal results stay as they are; the error belongs to the scan.
+    $('scan-estimate').textContent = `Could not check the faction feed: ${e.message}`;
+    $('scan-estimate').hidden = false;
+    $('scan-start').hidden = true;
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function startScan() {
+  if (busy || !state) return;
+  cancelled = false;
+  setError(null);
+  $('drill').hidden = true;
+  state.mode = 'faction';
+  setBusy(true);
+  try {
+    setProgress('Checking which fight logs are needed…');
     await fetchMissingLogs();
   } catch (e) {
     setError(e.message);
@@ -138,6 +267,14 @@ async function run(key, days) {
   } finally {
     setBusy(false);
   }
+  syncFactionControls();
+}
+
+function setView(view) {
+  if (busy || !state || state.mode !== 'faction') return;
+  state.view = view;
+  $('drill').hidden = true;
+  render();
 }
 
 async function switchType(type) {
@@ -147,6 +284,22 @@ async function switchType(type) {
   $('drill').hidden = true;
   state.type = type;
   showType(type);
+  if (state.mode === 'faction') {
+    // Counts can be large: show the estimate first and only auto-run when nothing new is needed.
+    setBusy(true);
+    try {
+      setProgress('Counting fight logs already on this device…');
+      const est = await estimateFaction();
+      showEstimate(est);
+      if (est.missing === 0) $('scan-start').hidden = true;
+      render();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
   setBusy(true);
   try {
     setProgress('Checking which fight logs are needed…');
@@ -179,7 +332,16 @@ $('start-form').addEventListener('submit', (e) => {
 $('remember').addEventListener('change', () => { if (!$('remember').checked) storedKey.clear(); });
 $('cancel').addEventListener('click', () => { cancelled = true; });
 $('only-strong').addEventListener('change', render);
-for (const b of document.querySelectorAll('.types button')) b.addEventListener('click', () => switchType(b.dataset.type));
+for (const b of document.querySelectorAll('#results .types button')) b.addEventListener('click', () => switchType(b.dataset.type));
+$('scan-check').addEventListener('click', checkScan);
+$('scan-start').addEventListener('click', startScan);
+for (const b of document.querySelectorAll('#views button')) b.addEventListener('click', () => setView(b.dataset.view));
+$('member-picker').addEventListener('change', () => {
+  if (busy || !state) return;
+  state.member = Number($('member-picker').value);
+  $('drill').hidden = true;
+  render();
+});
 $('clear').addEventListener('click', async () => {
   await (await openCache()).clear();
   storedKey.clear();
@@ -188,6 +350,7 @@ $('clear').addEventListener('click', async () => {
   setError(null);
   state = null;
   profiles.clear();
-  for (const id of ['results', 'drill', 'partial']) $(id).hidden = true;
+  for (const id of ['results', 'drill', 'partial', 'faction-panel']) $(id).hidden = true;
+  resetFactionPanel();
   $('cleared').hidden = false;
 });

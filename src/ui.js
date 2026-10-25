@@ -1,4 +1,4 @@
-import { ATTACK_TYPES } from './analyze.js?v=4';
+import { ATTACK_TYPES, formatDuration } from './analyze.js?v=5';
 
 // Rendering only. Every string from the API goes in as a text node, never as HTML.
 
@@ -36,18 +36,32 @@ const resultNoun = (result) => RESULT_NOUN[result] ?? `attack (${result.toLowerC
 const showsMoney = (type) => type === 'mugs' || type === 'all';
 const plural = (n, type) => (n === 1 ? ATTACK_TYPES[type].one : ATTACK_TYPES[type].many);
 
-export function renderSummary(el, { summary }) {
+// Faction scan helpers. Name from the members list, else from any attack's defender, else an id label.
+export function memberName(id, members, attacks) {
+  const listed = members.find((m) => m.id === id)?.name;
+  if (listed) return listed;
+  const seen = attacks.find((a) => a.defender?.id === id && a.defender?.name)?.defender.name;
+  return seen ?? `Member [${id}]`;
+}
+
+export function estimateText(type, est) {
+  if (est.missing === 0) return 'Ready — no new logs needed.';
+  return `About ${est.missing} fight logs to fetch for ${ATTACK_TYPES[type].many} — ${formatDuration(est.seconds)} at Torn's rate limit (other tools using this key will slow down meanwhile). You can cancel at any time; logs already fetched are kept on this device, so a later scan picks up where it stopped.`;
+}
+
+export function renderSummary(el, { summary }, { showMember = false } = {}) {
   const c = summary.byConfidence;
   const money_ = showsMoney(summary.type) ? ` (${money(summary.total)})` : '';
+  const onMembers = showMember ? ` on ${summary.members} member${summary.members === 1 ? '' : 's'}` : '';
   el.replaceChildren(
     h('p', { class: 'summary' },
-      h('strong', {}, `${summary.count} stealthed ${plural(summary.count, summary.type)}${money_}`),
+      h('strong', {}, `${summary.count} stealthed ${plural(summary.count, summary.type)}${onMembers}${money_}`),
       ` · ${c.High} High · ${c.Medium} Medium · ${c.Low} Low · ${c.None} no likely suspect`,
       summary.ambiguous > 0 ? ` · ${summary.ambiguous} ambiguous` : null),
   );
 }
 
-export function renderLeaderboard(el, { leaderboard, summary }) {
+export function renderLeaderboard(el, { leaderboard, summary }, { showMember = false } = {}) {
   if (!leaderboard.length) {
     el.replaceChildren(h('p', { class: 'muted' }, 'No suspects with Medium or High confidence.'));
     return;
@@ -58,18 +72,20 @@ export function renderLeaderboard(el, { leaderboard, summary }) {
       h('table', {},
         h('thead', {}, h('tr', {},
           h('th', {}, 'Suspect'), h('th', {}, 'Faction'), h('th', { class: 'num' }, 'Hits'),
+          showMember && h('th', { class: 'num' }, 'Members'),
           withMoney && h('th', { class: 'num' }, 'Taken'), h('th', {}, 'Best'))),
         h('tbody', {}, leaderboard.map((r) =>
           h('tr', {},
             h('td', {}, profileLink(r)),
             h('td', {}, r.faction ?? 'No faction'),
             h('td', { class: 'num' }, r.hits),
+            showMember && h('td', { class: 'num' }, r.members),
             withMoney && h('td', { class: 'num' }, money(r.total)),
             h('td', {}, badge(r.best))))))),
   );
 }
 
-export function renderMugList(el, { results, summary }, { onlyStrong, onSelect }) {
+export function renderMugList(el, { results, summary }, { onlyStrong, onSelect, showMember = false, nameOf = String }) {
   const { type } = summary;
   const rows = results.filter((r) => !onlyStrong || ['High', 'Medium'].includes(r.suspects[0]?.confidence));
   if (!rows.length) {
@@ -83,7 +99,7 @@ export function renderMugList(el, { results, summary }, { onlyStrong, onSelect }
     h('div', { class: 'scroll' },
       h('table', { class: 'clickable' },
         h('thead', {}, h('tr', {},
-          h('th', {}, 'When'), withResult && h('th', {}, 'Result'), withMoney && h('th', { class: 'num' }, 'Taken'),
+          h('th', {}, 'When'), showMember && h('th', {}, 'Member'), withResult && h('th', {}, 'Result'), withMoney && h('th', { class: 'num' }, 'Taken'),
           h('th', { class: 'num' }, 'FF'), h('th', {}, 'Weapons'), h('th', {}, 'Top suspect'))),
         h('tbody', {}, rows.map((r) => {
           const top = r.suspects[0];
@@ -95,6 +111,7 @@ export function renderMugList(el, { results, summary }, { onlyStrong, onSelect }
             }
           } },
             h('td', {}, when(r.mug.started)),
+            showMember && h('td', {}, nameOf(r.mug.defender.id)),
             withResult && h('td', {}, RESULT_LABEL[r.mug.result] ?? r.mug.result),
             withMoney && h('td', { class: 'num' }, r.mug.result === 'Mugged' ? money(r.mug.mugAmount) : '—'),
             h('td', { class: 'num' }, ffText(r.mug.ff)),
@@ -119,7 +136,7 @@ function identityText(identity) {
     : `Possibly ${identity.name}: matched directly on ${identity.matched} of ${identity.total} hits; the other ${rest} couldn't be verified.`;
 }
 
-export function renderGroups(el, { groups, summary }, { onSelect }) {
+export function renderGroups(el, { groups, summary }, { onSelect, showMember = false, nameOf = String }) {
   if (!groups.length) {
     el.replaceChildren(h('p', { class: 'muted' }, `No repeat attackers: no two stealthed ${ATTACK_TYPES[summary.type].many} share a weapon and fair fight.`));
     return;
@@ -129,7 +146,8 @@ export function renderGroups(el, { groups, summary }, { onSelect }) {
       h('summary', {},
         h('strong', {}, g.label), ` · ${g.members.length} hits · ${g.weapons.join(', ')} · FF ${ffSpan(g)}`,
         g.edge ? h('span', { class: 'muted' }, ` (fair fight at the ${g.ffMin === 3 ? 'cap' : 'floor'}, weaker)`) : null,
-        ` · ${dateSpan(g)}`),
+        ` · ${dateSpan(g)}`,
+        showMember ? ` · on ${nameOf(g.members[0].mug.defender.id)}` : null),
       h('p', { class: g.identity?.kind === 'conflict' ? 'error' : 'muted' }, identityText(g.identity)),
       h('ul', { class: 'members' }, g.members.map((m) =>
         h('li', {}, h('button', { type: 'button', class: 'link', onclick: () => onSelect(m) },
@@ -140,7 +158,7 @@ function logList(log) {
   return Array.isArray(log?.log) ? h('ol', { class: 'log' }, log.log.map((e) => h('li', {}, e.text))) : h('p', { class: 'muted' }, 'Log unavailable.');
 }
 
-export function renderDrilldown(el, row, { logFor, fingerprints, groups = [], loadProfile, onClose }) {
+export function renderDrilldown(el, row, { logFor, fingerprints, groups = [], loadProfile, onClose, showMember = false, nameOf = String }) {
   const { mug, suspects } = row;
   const group = groups.find((g) => g.label === row.group);
   const blocks = suspects.map((s) => {
@@ -156,15 +174,15 @@ export function renderDrilldown(el, row, { logFor, fingerprints, groups = [], lo
       h('ul', {}, s.reasons.map((r) => h('li', {}, r))),
       profileBox,
       h('details', {},
-        h('summary', {}, `Their visible fights on you (${fights.length})`),
+        h('summary', {}, showMember ? `Their visible fights on faction members (${fights.length})` : `Their visible fights on you (${fights.length})`),
         h('ul', { class: 'fights' }, fights.map((f) =>
           h('li', {}, h('details', {},
-            h('summary', {}, `${when(f.started)} · ${f.result} · FF ${ffText(f.ff)} · ${weaponsText(f)}`),
+            h('summary', {}, `${when(f.started)}${showMember ? ` · on ${nameOf(f.defender.id)}` : ''} · ${f.result} · FF ${ffText(f.ff)} · ${weaponsText(f)}`),
             logList(logFor(f.code))))))));
   });
   fill(el,
     h('div', { class: 'drill-head' },
-      h('h3', {}, `Stealthed ${resultNoun(mug.result)} · ${when(mug.started)}${mug.result === 'Mugged' ? ` · ${money(mug.mugAmount)}` : ''}`),
+      h('h3', {}, `Stealthed ${resultNoun(mug.result)} · ${when(mug.started)}${mug.result === 'Mugged' ? ` · ${money(mug.mugAmount)}` : ''}${showMember ? ` on ${nameOf(mug.defender.id)}` : ''}`),
       h('button', { type: 'button', onclick: onClose }, 'Close')),
     h('p', { class: 'muted' }, `FF ${ffText(mug.ff)} · respect ${mug.respect} · ${mug.overseas ? 'abroad' : 'in Torn City'}`),
     group ? h('p', { class: 'notice' }, `Part of ${group.label} (${group.members.length} hits). ${identityText(group.identity)}`) : null,
@@ -172,7 +190,7 @@ export function renderDrilldown(el, row, { logFor, fingerprints, groups = [], lo
     logList(logFor(mug.code)),
     h('h4', {}, 'Suspects'),
     row.ambiguous ? h('p', { class: 'caveat' }, "Two players fit this mug equally well — it can't be pinned on either.") : null,
-    blocks.length ? blocks : h('p', { class: 'muted' }, 'No likely suspect among the players who attacked you openly.'),
+    blocks.length ? blocks : h('p', { class: 'muted' }, showMember ? 'No likely suspect among the players who attacked faction members openly.' : 'No likely suspect among the players who attacked you openly.'),
     h('p', { class: 'caveat' }, 'Suspects are probable, not proof.'),
   );
 }

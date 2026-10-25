@@ -151,6 +151,7 @@
             <tr><th>Data sharing</th><td>None. No server, no analytics, no third parties. Your browser talks only to api.torn.com.</td></tr>
             <tr><th>Purpose of use</th><td>Identify likely attackers in your own incoming attack history.</td></tr>
             <tr><th>Key storage &amp; sharing</th><td>Kept in memory, or on this device if you tick "remember". Never shared.</td></tr>
+            <tr><th>Faction scan</th><td>Faction scan (optional, officers): reads your faction's attack feed that your key can already see; processed and cached on this device only.</td></tr>
             <tr><th>Key access level</th><td>Limited</td></tr>
           </tbody>
         </table>
@@ -194,9 +195,25 @@
     <p class="caveat">Suspects are probable, not proof. Fair fight shifts as stats change, and FF 3.00 is the cap many attackers share.</p>
   </section>
 
+  <section id="faction-panel" class="panel" hidden>
+    <h2 class="bar">Faction scan (officers)</h2>
+    <details id="faction-details">
+      <summary>What is a faction scan?</summary>
+      <p>Your key can read your whole faction's incoming attacks, stealthed ones included. A faction scan pools them, so an attacker seen openly hitting one member can be matched to stealthed hits on another. It runs in your browser only, and it can take many minutes because every fight log is fetched at Torn's rate limit. It never starts until you choose.</p>
+      <p><button id="scan-check" type="button">Check scan size</button></p>
+      <p id="scan-estimate" class="notice" aria-live="polite" hidden></p>
+      <p><button id="scan-start" class="primary" type="button" hidden>Start faction scan</button></p>
+    </details>
+    <div class="types" id="views" role="group" aria-label="Faction scan view" hidden>
+      <button type="button" data-view="faction" aria-pressed="true">Faction view</button>
+      <button type="button" data-view="member" aria-pressed="false">Member view</button>
+    </div>
+    <p><select id="member-picker" aria-label="Member" hidden></select></p>
+  </section>
+
   <footer>Not affiliated with Torn. Source code is public so you can check exactly where your key goes.</footer>
 </main>
 
-<script type="module" src="src/app.js?v=4"></script>
+<script type="module" src="src/app.js?v=5"></script>
 </body>
 </html>
