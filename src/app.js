@@ -169,7 +169,9 @@ async function run(key, days) {
   $('drill').hidden = true;
   $('partial').hidden = true;
   // Analyze is always personal mode; a faction scan is a separate, explicit opt-in.
-  if (state) { state.mode = 'personal'; state.view = 'faction'; }
+  // Drop the previous run entirely so a failed Analyze can never leave the panel wired to an old key's state.
+  state = null;
+  $('results').hidden = true;
   $('faction-panel').hidden = true;
   resetFactionPanel();
   showType('mugs');
@@ -292,7 +294,7 @@ async function switchType(type) {
       const est = await estimateFaction();
       showEstimate(est);
       if (est.missing === 0) $('scan-start').hidden = true;
-      render();
+      render(); // always: title, lists and the partial banner must follow the new type
     } catch (e) {
       setError(e.message);
     } finally {
