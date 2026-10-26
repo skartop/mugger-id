@@ -1,6 +1,6 @@
 // Fingerprints fights and scores visible attackers as suspects for stealthed mugs.
 // Pure functions: no network, no DOM.
-import { parseLog } from './parse.js?v=5';
+import { parseLog } from './parse.js?v=6';
 
 export const DAY = 86400;
 const WINDOW = 14 * DAY;

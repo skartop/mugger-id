@@ -37,6 +37,13 @@ Everything stays on your device: nothing is uploaded and there is no server.
 
 then open http://localhost:8765/.
 
+## Export
+
+"Export all attacks (CSV)" downloads every attack the page has loaded — in faction mode the whole
+faction feed — with exact UTC times, both players, result, respect, fair fight, the weapons and damage
+read from the fight log, the mug amount, and the page's top suspect, confidence and group. The file is
+created in your browser and saved to your device; nothing is uploaded.
+
 ## Releasing a change
 
 Bump the `?v=` number on the `<script>` tag in `index.html` and on every `import` in `src/`

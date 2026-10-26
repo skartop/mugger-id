@@ -1,7 +1,8 @@
-import { createClient, TornError } from './torn.js?v=5';
-import { openCache } from './cache.js?v=5';
-import { analyze, logsNeeded, scanEstimate, ATTACK_TYPES, DAY } from './analyze.js?v=5';
-import { renderSummary, renderLeaderboard, renderGroups, renderMugList, renderDrilldown, memberName, estimateText } from './ui.js?v=5';
+import { createClient, TornError } from './torn.js?v=6';
+import { openCache } from './cache.js?v=6';
+import { analyze, logsNeeded, scanEstimate, ATTACK_TYPES, DAY } from './analyze.js?v=6';
+import { attacksToCsv, exportFilename } from './export.js?v=6';
+import { renderSummary, renderLeaderboard, renderGroups, renderMugList, renderDrilldown, memberName, estimateText } from './ui.js?v=6';
 
 const KEY_STORE = 'mugger-id:key';
 const $ = (id) => document.getElementById(id);
@@ -51,6 +52,23 @@ function render() {
   renderGroups($('groups'), state.result, { onSelect: openDrill, showMember, nameOf });
   renderMugList($('mugs'), state.result, { onlyStrong: $('only-strong').checked, onSelect: openDrill, showMember, nameOf });
   setPartial();
+}
+
+// Downloads every loaded attack (this mode's whole feed, visible and stealthed) as a CSV file.
+function exportCsv() {
+  if (!state) return;
+  const faction = state.mode === 'faction';
+  const csv = faction
+    ? attacksToCsv(state.fattacks, state.logs, { pooled: true, since: state.fromTs })
+    : attacksToCsv(state.attacks, state.logs);
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = exportFilename(faction ? 'faction' : 'personal');
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const neededLogs = () => (state.mode === 'faction'
@@ -109,7 +127,7 @@ function setBusy(on) {
   $('working').hidden = !on;
   $('analyze').disabled = on;
   for (const b of document.querySelectorAll('.types button')) b.disabled = on;
-  for (const id of ['scan-check', 'scan-start', 'member-picker']) $(id).disabled = on;
+  for (const id of ['scan-check', 'scan-start', 'member-picker', 'export']) $(id).disabled = on;
 }
 
 function loadProfile(id) {
@@ -344,6 +362,7 @@ $('start-form').addEventListener('submit', (e) => {
 $('remember').addEventListener('change', () => { if (!$('remember').checked) storedKey.clear(); });
 $('cancel').addEventListener('click', () => { cancelled = true; });
 $('only-strong').addEventListener('change', render);
+$('export').addEventListener('click', exportCsv);
 for (const b of document.querySelectorAll('#results .types button')) b.addEventListener('click', () => switchType(b.dataset.type));
 $('scan-check').addEventListener('click', checkScan);
 $('scan-start').addEventListener('click', startScan);

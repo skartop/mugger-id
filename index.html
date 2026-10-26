@@ -98,6 +98,7 @@
   ul.members { margin: .2rem 0 0; padding-left: 1.2rem; }
   button.link { background: none; border: 0; padding: .15rem 0; color: var(--green); text-align: left; cursor: pointer; }
   button.link:hover { background: none; color: #a2cc45; text-decoration: underline; }
+  .export-row { margin: .75rem 0 0; }
   .drill-head { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
   .drill-head h3 { margin: 0; font-size: 1rem; }
   ol.log { padding-left: 1.6rem; font-size: .9rem; background: #232323; border: 1px solid var(--edge); border-radius: 3px; padding-block: .5rem; }
@@ -147,7 +148,7 @@
       <div class="scroll">
         <table class="ds">
           <tbody>
-            <tr><th>Data storage</th><td>Fight logs are cached in your browser only, so re-runs are fast. Nothing is stored anywhere else.</td></tr>
+            <tr><th>Data storage</th><td>Fight logs are cached in your browser only, so re-runs are fast. "Export all attacks" saves a CSV file to your own device. Nothing is stored anywhere else.</td></tr>
             <tr><th>Data sharing</th><td>None. No server, no analytics, no third parties. Your browser talks only to api.torn.com.</td></tr>
             <tr><th>Purpose of use</th><td>Identify likely attackers in your own incoming attack history.</td></tr>
             <tr><th>Key storage &amp; sharing</th><td>Kept in memory, or on this device if you tick "remember". Never shared.</td></tr>
@@ -177,6 +178,7 @@
       <button type="button" data-type="all" aria-pressed="false">All stealthed</button>
     </div>
     <p id="partial" class="notice" hidden></p>
+    <p class="export-row"><button id="export" type="button">Export all attacks (CSV)</button> <span class="muted">Every loaded attack with exact times, weapons and suspects, for a spreadsheet.</span></p>
     <div id="summary" class="panel"></div>
     <section class="panel">
       <h2 class="bar">Most wanted <span class="muted">(probable, not proof)</span></h2>
@@ -214,6 +216,6 @@
   <footer>Not affiliated with Torn. Source code is public so you can check exactly where your key goes.</footer>
 </main>
 
-<script type="module" src="src/app.js?v=5"></script>
+<script type="module" src="src/app.js?v=6"></script>
 </body>
 </html>
